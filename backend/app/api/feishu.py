@@ -381,7 +381,7 @@ async def feishu_event_webhook(
             _cfs_token = _cfs.set(_feishu_file_sender)
 
             # Call LLM with history
-            reply_text = await _call_agent_llm(db, agent_id, llm_user_text, history=history)
+            reply_text = await _call_agent_llm(db, agent_id, llm_user_text, history=history, user_id=platform_user_id)
             _cfs.reset(_cfs_token)
             print(f"[Feishu] LLM reply: {reply_text[:100]}")
 
@@ -582,7 +582,7 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
 
 
 
-async def _call_agent_llm(db: AsyncSession, agent_id: uuid.UUID, user_text: str, history: list[dict] | None = None) -> str:
+async def _call_agent_llm(db: AsyncSession, agent_id: uuid.UUID, user_text: str, history: list[dict] | None = None, user_id=None) -> str:
     """Call the agent's configured LLM model with conversation history.
     
     Reuses the same call_llm function as the WebSocket chat endpoint so that
@@ -615,6 +615,9 @@ async def _call_agent_llm(db: AsyncSession, agent_id: uuid.UUID, user_text: str,
         messages.extend(history[-10:])
     messages.append({"role": "user", "content": user_text})
 
+    # Use actual user_id so the system prompt knows who it's chatting with
+    effective_user_id = user_id or agent_id
+
     try:
         reply = await call_llm(
             model,
@@ -622,7 +625,7 @@ async def _call_agent_llm(db: AsyncSession, agent_id: uuid.UUID, user_text: str,
             agent.name,
             agent.role_description or "",
             agent_id=agent_id,
-            user_id=agent_id,  # use agent_id as fallback user for tool execution
+            user_id=effective_user_id,
         )
         return reply
     except Exception as e:
