@@ -528,15 +528,18 @@ async def delete_agent(
         except Exception:
             pass
 
-    # chat_sessions also has peer_agent_id referencing agents
-    try:
-        async with db.begin_nested():
-            await db.execute(
-                text("DELETE FROM chat_sessions WHERE peer_agent_id = :aid"),
-                {"aid": agent_id},
-            )
-    except Exception:
-        pass
+    # Clean up secondary FK columns that also reference agents table
+    secondary_fk_cleanups = [
+        "DELETE FROM chat_sessions WHERE peer_agent_id = :aid",
+        "DELETE FROM gateway_messages WHERE sender_agent_id = :aid",
+        "UPDATE chat_messages SET sender_agent_id = NULL WHERE sender_agent_id = :aid",
+    ]
+    for sql in secondary_fk_cleanups:
+        try:
+            async with db.begin_nested():
+                await db.execute(text(sql), {"aid": agent_id})
+        except Exception:
+            pass
 
     # Also clean agent_agent_relationships (has both agent_id and target_agent_id)
     try:
