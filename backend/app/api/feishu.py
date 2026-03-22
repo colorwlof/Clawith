@@ -242,6 +242,38 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
 
         logger.info(f"[Feishu] Received {msg_type} message, chat_type={chat_type}, from={sender_open_id}")
 
+        # ── Group chat: only reply if bot was mentioned ──
+        if chat_type == "group":
+            _bot_open_id = ""
+            try:
+                _app_token_resp = await feishu_service.get_tenant_access_token(config.app_id, config.app_secret)
+                _app_token = _app_token_resp.get("tenant_access_token", "")
+                _bot_info_resp = feishu_service._sync_get(
+                    "https://open.feishu.cn/open-apis/auth/v3/bot/info",
+                    headers={"Authorization": f"Bearer {_app_token}"},
+                )
+                if hasattr(_bot_info_resp, "json"):
+                    _bot_info = _bot_info_resp.json()
+                else:
+                    _bot_info = _bot_info_resp
+                _bot_open_id = (_bot_info.get("data") or {}).get("open_id", "")
+            except Exception:
+                pass
+
+            _mentioned_open_ids = []
+            _mention_list = message.get("mention", [])
+            for _m in _mention_list:
+                if isinstance(_m, dict):
+                    _id = _m.get("id", {})
+                    if isinstance(_id, dict):
+                        _mentioned_open_ids.append(_id.get("open_id", ""))
+                    else:
+                        _mentioned_open_ids.append(str(_id))
+
+            if _bot_open_id and _bot_open_id not in _mentioned_open_ids:
+                logger.info(f"[Feishu] Bot not mentioned in group, ignoring")
+                return {"code": 0, "msg": "bot not mentioned"}
+
         # ── Normalize post (rich text) → extract text + schedule image downloads ──
         if msg_type == "post":
             import json as _json_post
@@ -546,61 +578,93 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
             except Exception as _fe:
                 logger.error(f"[Feishu] File injection error: {_fe}")
 
-            # Set sender open_id contextvar so calendar tool can auto-invite the requester
-            from app.services.agent_tools import channel_feishu_sender_open_id as _cfso
-
-            _cfso_token = _cfso.set(sender_open_id)
-
-            # Set channel_file_sender contextvar so the agent can send files back via Feishu
-            from app.services.agent_tools import channel_file_sender as _cfs
-
-            _reply_to_id = chat_id if chat_type == "group" else sender_open_id
-            _rid_type = "chat_id" if chat_type == "group" else "open_id"
-
-            async def _feishu_file_sender(file_path, msg: str = ""):
+            # ── Inject group chat context for multi-agent collaboration ──
+            # When bot is mentioned, fetch recent group messages so the AI can see
+            # what other bots/agents said and decide if it should reply.
+            if chat_type == "group" and chat_id:
                 try:
-                    await feishu_service.upload_and_send_file(
-                        config.app_id,
-                        config.app_secret,
-                        _reply_to_id,
-                        file_path,
-                        receive_id_type=_rid_type,
-                        accompany_msg=msg,
-                    )
-                except Exception as _upload_err:
-                    # Fallback: send a download link when upload permission is not granted
-                    from pathlib import Path as _P
-                    from app.config import get_settings as _gs_fallback
+                    import time as _grp_time
 
-                    _fs = _gs_fallback()
-                    _base_url = getattr(_fs, "BASE_URL", "").rstrip("/") or ""
-                    _fp = _P(file_path)
-                    _ws_root = _P(_fs.AGENT_DATA_DIR)
-                    try:
-                        _rel = str(_fp.relative_to(_ws_root / str(agent_id)))
-                    except ValueError:
-                        _rel = _fp.name
-                    _fallback_parts = []
-                    if msg:
-                        _fallback_parts.append(msg)
-                    if _base_url:
-                        _dl_url = f"{_base_url}/api/agents/{agent_id}/files/download?path={_rel}"
-                        _fallback_parts.append(f"📎 {_fp.name}\n🔗 {_dl_url}")
-                    _fallback_parts.append(
-                        f"⚠️ 文件直接发送失败（{_upload_err}）\n"
-                        "如需 Agent 直接发飞书文件，请在飞书开放平台为应用开启 "
-                        "`im:resource`（即 `im:resource:upload`）权限并发布版本。"
-                    )
-                    await feishu_service.send_message(
-                        config.app_id,
-                        config.app_secret,
-                        _reply_to_id,
-                        "text",
-                        json.dumps({"text": "\n\n".join(_fallback_parts)}),
-                        receive_id_type=_rid_type,
-                    )
+                    async def _fetch_group_context() -> str:
+                        _app_token = ""
+                        try:
+                            _resp = await feishu_service.get_tenant_access_token(config.app_id, config.app_secret)
+                            _app_token = _resp.get("tenant_access_token", "")
+                        except Exception:
+                            return ""
+                        if not _app_token:
+                            return ""
+                        _hdrs = {"Authorization": f"Bearer {_app_token}"}
+                        _params = {
+                            "container_id_type": "chat",
+                            "container_id": chat_id,
+                            "start_time": str(int(_grp_time.time()) - 600),
+                            "end_time": str(int(_grp_time.time())),
+                            "sort_type": "ByCreateTimeAsc",
+                            "page_size": 20,
+                        }
+                        try:
+                            _msgs_resp = feishu_service._sync_get(
+                                "https://open.feishu.cn/open-apis/im/v1/messages",
+                                headers=_hdrs,
+                                params=_params,
+                            )
+                            if hasattr(_msgs_resp, "json"):
+                                _msgs_data = _msgs_resp.json()
+                            else:
+                                _msgs_data = _msgs_resp
+                            _items = (_msgs_data.get("data") or {}).get("items", [])
+                        except Exception:
+                            return ""
+                        if not _items:
+                            return ""
+                        _parts = []
+                        for _m in _items:
+                            _m_sender = (_m.get("sender") or {}).get("id", "")
+                            if _m_sender == _bot_open_id:
+                                continue
+                            _m_type = _m.get("msg_type", "")
+                            _m_content = _m.get("body", {}).get("content", "")
+                            if _m_type == "text":
+                                import json as _j_gc
 
-            _cfs_token = _cfs.set(_feishu_file_sender)
+                                try:
+                                    _txt = _j_gc.loads(_m_content).get("text", "")
+                                except Exception:
+                                    _txt = _m_content
+                                if _txt:
+                                    _txt = re.sub(r"@_user_\d+", "", _txt).strip()
+                                    if _txt:
+                                        _parts.append(f"[群消息] {_txt}")
+                            elif _m_type == "post":
+                                import json as _j_gc_post
+
+                                try:
+                                    _pc = _j_gc_post.loads(_m_content)
+                                    _pc_para = _pc.get("content", [])
+                                    if not _pc_para:
+                                        for _lk, _lv in _pc.items():
+                                            if isinstance(_lv, dict) and "content" in _lv:
+                                                _pc_para = _lv["content"]
+                                                break
+                                    _tp = []
+                                    for _pg in _pc_para:
+                                        for _el in _pg:
+                                            if _el.get("tag") == "text":
+                                                _tp.append(_el.get("text", ""))
+                                    _txt2 = "".join(_tp).strip()
+                                    if _txt2:
+                                        _parts.append(f"[群消息] {_txt2}")
+                                except Exception:
+                                    pass
+                        return "\n".join(_parts)
+
+                    _grp_ctx = await _fetch_group_context()
+                    if _grp_ctx:
+                        llm_user_text = f"[群聊上下文（最近消息，来自其他成员）]\n{_grp_ctx}\n\n---\n当前用户的消息：\n{llm_user_text}"
+                        logger.info(f"[Feishu] Injected group context ({len(_grp_ctx)} chars)")
+                except Exception as _grp_e:
+                    logger.error(f"[Feishu] Group context injection error: {_grp_e}")
 
             # Set up streaming response via interactive card
             import time

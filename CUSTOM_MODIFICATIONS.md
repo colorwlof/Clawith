@@ -299,7 +299,65 @@ if (chatInputRef.current) chatInputRef.current.value = '';
 <button onClick={sendChatMsg} disabled={!wsConnected}>Send</button>
 ```
 
-## 9. 其他（已在 v1.7.1 合并）
+## 9. 飞书群聊多 Agent 协作：注入群消息上下文
+
+**文件**: `backend/app/api/feishu.py`
+
+**位置**: `_feishu_event()` 函数内，`llm_user_text` 构建之后、流式卡片响应之前（约 line 580 之后）
+
+**问题**: 飞书群聊中，用户 @ 机器人后只有被 @ 的机器人回复。但 AI 需要知道群里其他机器人的对话内容才能决定是否要回复（或协作）。
+
+**修改**: 在 bot 被 mention 时，主动拉取群里最近 10 分钟的消息，过滤掉自己的消息和纯 @ 消息，将上下文拼接到 `llm_user_text` 前面传给 LLM。
+
+```python
+# ── Inject group chat context for multi-agent collaboration ──
+if chat_type == "group" and chat_id:
+    try:
+        import time as _grp_time
+        async def _fetch_group_context() -> str:
+            _app_token = ""
+            try:
+                _resp = await feishu_service.get_tenant_access_token(config.app_id, config.app_secret)
+                _app_token = _resp.get("tenant_access_token", "")
+            except Exception:
+                return ""
+            if not _app_token:
+                return ""
+            _hdrs = {"Authorization": f"Bearer {_app_token}"}
+            _params = {
+                "container_id_type": "chat",
+                "container_id": chat_id,
+                "start_time": str(int(_grp_time.time()) - 600),
+                "end_time": str(int(_grp_time.time())),
+                "sort_type": "ByCreateTimeAsc",
+                "page_size": 20,
+            }
+            _msgs_resp = feishu_service._sync_get(...)
+            _items = (_msgs_resp.json().get("data") or {}).get("items", [])
+            _parts = []
+            for _m in _items:
+                if _m["sender"]["id"] == _bot_open_id:
+                    continue
+                if _m["msg_type"] == "text":
+                    _txt = re.sub(r"@_user_\d+", "", _txt).strip()
+                    if _txt:
+                        _parts.append(f"[群消息] {_txt}")
+                elif _m["msg_type"] == "post":
+                    # 解析富文本消息...
+            return "\n".join(_parts)
+
+        _grp_ctx = await _fetch_group_context()
+        if _grp_ctx:
+            llm_user_text = (
+                f"[群聊上下文（最近消息）]\n{_grp_ctx}\n\n---\n当前用户的消息：\n{llm_user_text}"
+            )
+    except Exception as _grp_e:
+        logger.error(f"[Feishu] Group context injection error: {_grp_e}")
+```
+
+---
+
+## 10. 其他（已在 v1.7.1 合并）
 
 以下修复在 v1.7.1 中已合并，无需手动修改：
 
