@@ -363,3 +363,45 @@ if chat_type == "group" and chat_id:
 
 - `write_text()` 添加 `encoding="utf-8"` 解决 Windows GBK 编码问题
 - Skill 创建时初始化 `files = []` 避免异步懒加载错误
+
+---
+
+## 15. 升级到 v1.7.2（2026-03-23）
+
+### 15.1 bot_p2p_chat_entered_v1 事件注册
+
+**文件**: `backend/app/services/feishu_ws.py`
+
+**问题**: 飞书机器人加入私聊事件未注册
+
+**修改**: 添加事件注册：
+```python
+.register_p2_customized_event("im.chat.access_event.bot_p2p_chat_entered_v1", handle_message)
+```
+
+### 15.2 Linux 硬编码路径修复（Windows 兼容）
+
+**文件**: 
+- `backend/app/services/agent_tools.py`
+- `backend/app/api/feishu.py`
+
+**问题**: 飞书联系人缓存路径硬编码为 `/data/workspaces/...`
+
+**修改**: 全部改为使用 `WORKSPACE_ROOT`
+
+### 15.3 SyntaxWarning escape sequence
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**问题**: `\_` 语法警告
+
+**修改**: 改为 `r"\_"` (raw string)
+
+### 15.4 数据库迁移：llm_models.temperature
+
+**问题**: 新版本需要 `temperature` 字段
+
+**修复**: 
+```sql
+ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
+```
