@@ -103,6 +103,9 @@ class Agent(Base):
     # Timezone (IANA format, e.g. "Asia/Shanghai"). None = inherit from tenant.
     timezone: Mapped[str | None] = mapped_column(String(50), default=None, nullable=True)
 
+    # Sandbox mode for code execution
+    sandbox_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -116,6 +119,7 @@ class Agent(Base):
     def has_api_key(self) -> bool:
         """Whether this agent has an API key configured."""
         return bool(self.api_key_hash)
+
     permissions: Mapped[list["AgentPermission"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
     tasks: Mapped[list["Task"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
     channel_config: Mapped["ChannelConfig | None"] = relationship(back_populates="agent", uselist=False)

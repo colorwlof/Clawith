@@ -395,6 +395,41 @@ export default function OpenClawSettings({ agent, agentId }: OpenClawSettingsPro
                     )}
                 </div>
             )}
+
+            {/* ── Sandbox Settings ── */}
+            <div style={{ marginTop: '24px', padding: '16px', background: 'var(--surface-color)', borderRadius: '8px' }}>
+                <h3 style={{ marginBottom: '12px' }}>🛡️ {isChinese ? '代码运行设置' : 'Code Execution Settings'}</h3>
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                        <input
+                            type="checkbox"
+                            checked={agent?.sandbox_enabled !== false}
+                            onChange={async (e) => {
+                                const enabled = e.target.checked;
+                                try {
+                                    await fetch(`/api/agents/${agentId}`, {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
+                                        body: JSON.stringify({ sandbox_enabled: enabled }),
+                                    });
+                                    queryClient.invalidateQueries({ queryKey: ['agent', agentId] });
+                                } catch (err) {
+                                    console.error('Failed to update sandbox setting:', err);
+                                }
+                            }}
+                        />
+                        <span style={{ fontWeight: 500 }}>
+                            {isChinese ? '启用沙箱运行' : 'Enable Sandbox'}
+                        </span>
+                    </label>
+                </div>
+                <p style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '8px' }}>
+                    {isChinese 
+                        ? '关闭沙箱后，代码可以访问网络、文件系统等系统资源（如 pg8000、requests 等）'
+                        : 'Disable sandbox to allow code to access network, filesystem, and other system resources (e.g., pg8000, requests)'}
+                </p>
+            </div>
         </div>
     );
 }

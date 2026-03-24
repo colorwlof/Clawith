@@ -1144,7 +1144,7 @@ async def _execute_tool_direct(
                 return "Missing path"
             return _write_file(ws, path, content, tenant_id=_agent_tenant_id)
         elif tool_name == "execute_code":
-            return await _execute_code(ws, arguments)
+            return await _execute_code(ws, arguments, agent_id)
         elif tool_name == "web_search":
             return await _web_search(arguments)
         elif tool_name == "jina_search":
@@ -3812,7 +3812,7 @@ def _check_code_safety(language: str, code: str) -> str | None:
     return None
 
 
-async def _execute_code(ws: Path, arguments: dict) -> str:
+async def _execute_code(ws: Path, arguments: dict, agent_id: uuid.UUID) -> str:
     """Execute code in a sandboxed subprocess within the agent's workspace."""
     import asyncio
 
@@ -3826,10 +3826,22 @@ async def _execute_code(ws: Path, arguments: dict) -> str:
     if language not in ("python", "bash", "node"):
         return f"❌ Unsupported language: {language}. Use: python, bash, or node"
 
-    # Security check
-    safety_error = _check_code_safety(language, code)
-    if safety_error:
-        return safety_error
+    # Check if sandbox is disabled for this agent
+    from sqlalchemy import select
+    from app.models.agent import Agent
+    from app.database import async_session
+
+    async with async_session() as db:
+        result = await db.execute(select(Agent).where(Agent.id == agent_id))
+        agent = result.scalar_one_or_none()
+
+    sandbox_enabled = agent.sandbox_enabled if agent else True
+
+    # Security check (skip if sandbox disabled)
+    if sandbox_enabled:
+        safety_error = _check_code_safety(language, code)
+        if safety_error:
+            return safety_error
 
     # Working directory is the agent's workspace/ subdirectory (must be absolute)
     work_dir = (ws / "workspace").resolve()
