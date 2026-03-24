@@ -330,7 +330,7 @@ if chat_type == "group" and chat_id:
                 "start_time": str(int(_grp_time.time()) - 600),
                 "end_time": str(int(_grp_time.time())),
                 "sort_type": "ByCreateTimeAsc",
-                "page_size": 20,
+                "page_size": 50,
             }
             _msgs_resp = feishu_service._sync_get(...)
             _items = (_msgs_resp.json().get("data") or {}).get("items", [])
@@ -576,7 +576,7 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 .register_p2_customized_event("im.chat.access_event.bot_p2p_chat_entered_v1", handle_message)
 ```
 
-### 15.2 Linux 硬编码路径修复（Windows 兼容）
+### 15.2 Linux 硬编码路径修复（Windows 兼容）✅ 已实现
 
 **文件**: 
 - `backend/app/services/agent_tools.py`
@@ -584,9 +584,9 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 
 **问题**: 飞书联系人缓存路径硬编码为 `/data/workspaces/...`
 
-**修改**: 全部改为使用 `WORKSPACE_ROOT`
+**修改**: 全部改为使用 `get_settings().AGENT_DATA_DIR`
 
-### 15.3 SyntaxWarning escape sequence
+### 15.3 SyntaxWarning escape sequence ✅ 已实现
 
 **文件**: `backend/app/services/agent_tools.py`
 
@@ -594,7 +594,7 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 
 **修改**: 改为 `r"\_"` (raw string)
 
-### 15.4 数据库迁移：llm_models.temperature
+### 15.4 数据库迁移：llm_models.temperature ✅ 已实现
 
 **问题**: 新版本需要 `temperature` 字段
 
@@ -602,3 +602,32 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 ```sql
 ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 ```
+
+### 15.5 fetch_feishu_group_messages 工具优化 ✅ 新增
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**功能**:
+- 群号动态获取：`[From: {chat_id}]`
+- 格式 `(发送者@目标)`，如 `(小美@赵光明)`
+- Bot 消息默认 @赵光明
+- 最多 10 条消息
+- 每次拉取后保存最后一条消息时间到 `feishu_fetch_times.json`
+- 下次只拉取该时间之后的消息（增量拉取）
+- 验证 chat_id 必须以 `oc_` 开头（群号格式）
+
+### 15.6 feishu.py 变量初始化修复 ✅ 新增
+
+**文件**: `backend/app/api/feishu.py`
+
+**问题**: `_other_mentions` 变量在闭包中未定义
+
+**修改**: 在函数开头初始化 `_other_mentions = []` 和 `_mentioned_humans = []`
+
+### 15.7 群上下文注入限制 ✅ 新增
+
+**文件**: `backend/app/api/feishu.py`
+
+**问题**: 私聊也会拉取群历史消息
+
+**修改**: `_fetch_group_context()` 只在 `chat_type == "group"` 时调用
