@@ -397,13 +397,17 @@ export default function OpenClawSettings({ agent, agentId }: OpenClawSettingsPro
             )}
 
             {/* ── Sandbox Settings ── */}
-            <div style={{ marginTop: '24px', padding: '16px', background: 'var(--surface-color)', borderRadius: '8px' }}>
-                <h3 style={{ marginBottom: '12px' }}>🛡️ {isChinese ? '代码运行设置' : 'Code Execution Settings'}</h3>
-                
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <div className="card" style={{ marginTop: '16px' }}>
+                <div className="card-body">
+                    <h5 className="card-title" style={{ marginBottom: '12px' }}>
+                        {isChinese ? '🛡️ 代码运行设置' : '🛡️ Code Execution Settings'}
+                    </h5>
+                    
+                    <div className="form-check">
                         <input
                             type="checkbox"
+                            className="form-check-input"
+                            id="sandbox-enabled"
                             checked={agent?.sandbox_enabled !== false}
                             onChange={async (e) => {
                                 const enabled = e.target.checked;
@@ -419,16 +423,16 @@ export default function OpenClawSettings({ agent, agentId }: OpenClawSettingsPro
                                 }
                             }}
                         />
-                        <span style={{ fontWeight: 500 }}>
+                        <label className="form-check-label" htmlFor="sandbox-enabled">
                             {isChinese ? '启用沙箱运行' : 'Enable Sandbox'}
-                        </span>
-                    </label>
+                        </label>
+                    </div>
+                    <p className="text-muted" style={{ fontSize: '12px', marginTop: '8px', marginBottom: 0 }}>
+                        {isChinese 
+                            ? '关闭沙箱后，代码可以访问网络、文件系统等系统资源（如 pg8000、requests 等）'
+                            : 'Disable sandbox to allow code to access network, filesystem, and other system resources (e.g., pg8000, requests)'}
+                    </p>
                 </div>
-                <p style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '8px' }}>
-                    {isChinese 
-                        ? '关闭沙箱后，代码可以访问网络、文件系统等系统资源（如 pg8000、requests 等）'
-                        : 'Disable sandbox to allow code to access network, filesystem, and other system resources (e.g., pg8000, requests)'}
-                </p>
             </div>
         </div>
     );
