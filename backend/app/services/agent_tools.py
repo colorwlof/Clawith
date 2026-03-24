@@ -1260,7 +1260,7 @@ async def execute_tool(
         elif tool_name == "plaza_add_comment":
             result = await _plaza_add_comment(agent_id, arguments)
         elif tool_name == "execute_code":
-            result = await _execute_code(ws, arguments)
+            result = await _execute_code(ws, arguments, agent_id)
         elif tool_name == "upload_image":
             result = await _upload_image(agent_id, ws, arguments)
         elif tool_name == "discover_resources":

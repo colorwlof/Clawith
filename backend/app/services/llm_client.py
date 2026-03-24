@@ -146,7 +146,7 @@ class LLMClient(ABC):
         api_key: str,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -200,7 +200,7 @@ class OpenAICompatibleClient(LLMClient):
         api_key: str,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         supports_tool_choice: bool = True,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
@@ -526,7 +526,7 @@ class OpenAIResponsesClient(LLMClient):
         api_key: str,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         supports_tool_choice: bool = True,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
@@ -832,7 +832,7 @@ class GeminiClient(LLMClient):
         api_key: str,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         supports_tool_choice: bool = True,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
@@ -1328,7 +1328,7 @@ class AnthropicClient(LLMClient):
         api_key: str,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
         self._client: httpx.AsyncClient | None = None
@@ -1912,7 +1912,7 @@ def create_llm_client(
             base_url=final_base_url,
             model=model,
             timeout=timeout,
-            supports_tool_choice=supports_tool_choice
+            supports_tool_choice=supports_tool_choice,
         )
     else:
         # Default to OpenAI-compatible for unknown providers

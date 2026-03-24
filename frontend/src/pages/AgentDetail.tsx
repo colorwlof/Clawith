@@ -1060,6 +1060,7 @@ function AgentDetailInner() {
         max_triggers: 20,
         min_poll_interval_min: 5,
         webhook_rate_limit: 5,
+        sandbox_enabled: true,
     });
     const [settingsSaving, setSettingsSaving] = useState(false);
     const [settingsSaved, setSettingsSaved] = useState(false);
@@ -1079,6 +1080,7 @@ function AgentDetailInner() {
                 max_triggers: (agent as any).max_triggers ?? 20,
                 min_poll_interval_min: (agent as any).min_poll_interval_min ?? 5,
                 webhook_rate_limit: (agent as any).webhook_rate_limit ?? 5,
+                sandbox_enabled: (agent as any).sandbox_enabled ?? true,
             });
             settingsInitRef.current = true;
         }
@@ -3801,7 +3803,8 @@ function AgentDetailInner() {
                             String(settingsForm.max_tokens_per_month) !== String(agent?.max_tokens_per_month || '') ||
                             settingsForm.max_triggers !== ((agent as any)?.max_triggers ?? 20) ||
                             settingsForm.min_poll_interval_min !== ((agent as any)?.min_poll_interval_min ?? 5) ||
-                            settingsForm.webhook_rate_limit !== ((agent as any)?.webhook_rate_limit ?? 5)
+                            settingsForm.webhook_rate_limit !== ((agent as any)?.webhook_rate_limit ?? 5) ||
+                            settingsForm.sandbox_enabled !== ((agent as any)?.sandbox_enabled ?? true)
                         );
 
                         const handleSaveSettings = async () => {
@@ -3818,6 +3821,7 @@ function AgentDetailInner() {
                                     max_triggers: settingsForm.max_triggers,
                                     min_poll_interval_min: settingsForm.min_poll_interval_min,
                                     webhook_rate_limit: settingsForm.webhook_rate_limit,
+                                    sandbox_enabled: settingsForm.sandbox_enabled,
                                 } as any);
                                 queryClient.invalidateQueries({ queryKey: ['agent', id] });
                                 settingsInitRef.current = false;
@@ -4084,6 +4088,28 @@ function AgentDetailInner() {
                                         </div>
                                     );
                                 })()}
+
+                                {/* Sandbox Settings */}
+                                <div className="card" style={{ marginBottom: '12px' }}>
+                                    <h4 style={{ marginBottom: '12px' }}>🛡️ {i18n.language?.startsWith('zh') ? '代码运行设置' : 'Code Execution Settings'}</h4>
+                                    <div className="form-check">
+                                        <input
+                                            type="checkbox"
+                                            className="form-check-input"
+                                            id="sandbox-enabled"
+                                            checked={settingsForm.sandbox_enabled}
+                                            onChange={(e) => setSettingsForm(f => ({ ...f, sandbox_enabled: e.target.checked }))}
+                                        />
+                                        <label className="form-check-label" htmlFor="sandbox-enabled">
+                                            {i18n.language?.startsWith('zh') ? '启用沙箱运行' : 'Enable Sandbox'}
+                                        </label>
+                                    </div>
+                                    <p className="text-muted" style={{ fontSize: '12px', marginTop: '8px', marginBottom: 0 }}>
+                                        {i18n.language?.startsWith('zh')
+                                            ? '关闭沙箱后，代码可以访问网络、文件系统等系统资源（如 pg8000、requests 等）'
+                                            : 'Disable sandbox to allow code to access network, filesystem, and other system resources (e.g., pg8000, requests)'}
+                                    </p>
+                                </div>
 
                                 {/* Autonomy Policy — native agents only */}
                                 {(agent as any)?.agent_type !== 'openclaw' && <div className="card" style={{ marginBottom: '12px' }}>

@@ -16,6 +16,7 @@ from app.models.channel_config import ChannelConfig
 from app.models.user import User
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut, TokenResponse, UserOut
 from app.services.feishu_service import feishu_service
+from app.services.agent_tools import _fetch_feishu_group_messages
 
 router = APIRouter(tags=["feishu"])
 
@@ -296,6 +297,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
         _bot_open_id = ""
         _other_mentions = []
         _mentioned_humans = []
+        _sender_type = "user"
+        _sender_open_id = ""
 
         # ── Group chat: only reply if bot was mentioned ──
         if chat_type == "group":
@@ -650,80 +653,20 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                     import time as _grp_time
 
                     async def _fetch_group_context() -> str:
-                        import time as _grp_time
-
-                        _app_token = ""
                         try:
-                            _resp = await feishu_service.get_tenant_access_token(config.app_id, config.app_secret)
-                            _app_token = _resp.get("tenant_access_token", "")
-                        except Exception:
-                            return ""
-                        if not _app_token:
-                            return ""
-                        _hdrs = {"Authorization": f"Bearer {_app_token}"}
-                        _params = {
-                            "container_id_type": "chat",
-                            "container_id": chat_id,
-                            "start_time": str(int(_grp_time.time()) - 600),
-                            "end_time": str(int(_grp_time.time())),
-                            "sort_type": "ByCreateTimeAsc",
-                            "page_size": 50,
-                        }
-                        try:
-                            _msgs_resp = feishu_service._sync_get(
-                                "https://open.feishu.cn/open-apis/im/v1/messages",
-                                headers=_hdrs,
-                                params=_params,
+                            _result = await _fetch_feishu_group_messages(
+                                agent_id,
+                                {
+                                    "chat_id": chat_id,
+                                    "limit": 10,
+                                    "start_time": "600",
+                                    "include_own": False,
+                                },
                             )
-                            if hasattr(_msgs_resp, "json"):
-                                _msgs_data = _msgs_resp.json()
-                            else:
-                                _msgs_data = _msgs_resp
-                            _items = (_msgs_data.get("data") or {}).get("items", [])
-                        except Exception:
+                            return _result
+                        except Exception as _e:
+                            logger.error(f"[Feishu] Error fetching group context: {_e}")
                             return ""
-                        if not _items:
-                            return ""
-                        _parts = []
-                        for _m in _items:
-                            _m_sender = (_m.get("sender") or {}).get("id", "")
-                            if _m_sender == _bot_open_id:
-                                continue
-                            _m_type = _m.get("msg_type", "")
-                            _m_content = _m.get("body", {}).get("content", "")
-                            if _m_type == "text":
-                                import json as _j_gc
-
-                                try:
-                                    _txt = _j_gc.loads(_m_content).get("text", "")
-                                except Exception:
-                                    _txt = _m_content
-                                if _txt:
-                                    _txt = re.sub(r"@_user_\d+", "", _txt).strip()
-                                    if _txt:
-                                        _parts.append(f"[群消息] {_txt}")
-                            elif _m_type == "post":
-                                import json as _j_gc_post
-
-                                try:
-                                    _pc = _j_gc_post.loads(_m_content)
-                                    _pc_para = _pc.get("content", [])
-                                    if not _pc_para:
-                                        for _lk, _lv in _pc.items():
-                                            if isinstance(_lv, dict) and "content" in _lv:
-                                                _pc_para = _lv["content"]
-                                                break
-                                    _tp = []
-                                    for _pg in _pc_para:
-                                        for _el in _pg:
-                                            if _el.get("tag") == "text":
-                                                _tp.append(_el.get("text", ""))
-                                    _txt2 = "".join(_tp).strip()
-                                    if _txt2:
-                                        _parts.append(f"[群消息] {_txt2}")
-                                except Exception:
-                                    pass
-                        return "\n".join(_parts)
 
                     _grp_ctx = await _fetch_group_context()
                     if _grp_ctx:

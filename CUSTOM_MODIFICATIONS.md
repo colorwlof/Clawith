@@ -631,3 +631,34 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 **问题**: 私聊也会拉取群历史消息
 
 **修改**: `_fetch_group_context()` 只在 `chat_type == "group"` 时调用
+
+### 15.8 群聊天记录改用工具获取 ✅ 新增
+
+**文件**: `backend/app/api/feishu.py`
+
+**功能**:
+- 群上下文获取改为调用 `_fetch_feishu_group_messages` 工具
+- 复用工具的增量拉取、格式化为 `(发送者@目标)` 等功能
+- 简化代码，删除约60行重复的 API 调用代码
+
+### 15.9 sandbox_enabled 字段添加 ✅ 新增
+
+**文件**: 
+- `backend/app/schemas/schemas.py` - AgentUpdate schema 添加字段
+- `frontend/src/pages/AgentDetail.tsx` - Settings 页面添加沙箱开关
+
+**功能**: 允许前端保存沙箱开关设置
+
+### 15.10 _execute_code 缺少 agent_id 参数修复 ✅ 新增
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**问题**: 调用 `_execute_code()` 时缺少 `agent_id` 参数
+
+**修改**: 添加 `agent_id` 参数传递
+
+### 15.11 LLM 超时时间改为 10 分钟 ✅ 新增
+
+**文件**: `backend/app/services/llm_client.py`
+
+**修改**: `timeout` 默认值从 120 秒改为 600 秒
