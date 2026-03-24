@@ -357,16 +357,213 @@ if chat_type == "group" and chat_id:
 
 ---
 
-## 10. 其他（已在 v1.7.1 合并）
+## 10. 飞书群聊多 Agent @mention 过滤与上下文注入（2026-03-22）
 
-以下修复在 v1.7.1 中已合并，无需手动修改：
+**文件**: `backend/app/api/feishu.py`
 
-- `write_text()` 添加 `encoding="utf-8"` 解决 Windows GBK 编码问题
-- Skill 创建时初始化 `files = []` 避免异步懒加载错误
+### 10.1 @mention 过滤（按用户指定 bot 回复）
+
+**问题**: 群里所有 bot 都收到消息并全部回复，用户 @ 某个 bot 时也如此。
+
+**逻辑**:
+- 有 mention 列表时：只有被 @ 的 bot 回复，其他 bot 跳过
+- 没有 mention 时：所有 bot 回复（会议模式）
+
+**关键代码**（在 `llm_user_text` 构建之前）:
+```python
+_mentioned_open_ids = []
+_mention_list = message.get("mention", []) or message.get("mentions", [])
+for _m in _mention_list:
+    if isinstance(_m, dict):
+        _id = _m.get("id", {})
+        if isinstance(_id, dict):
+            _mentioned_open_ids.append(_id.get("open_id", ""))
+
+if _mentioned_open_ids:
+    _bot_open_id = await _get_bot_open_id()  # httpx 调用 /bot/v3/info
+    _other_mentions = [_m for _m in _mention_list
+                       if (_m.get("id") or {}).get("open_id", "") != _bot_open_id]
+    if _bot_open_id and _bot_open_id not in _mentioned_open_ids:
+        return {"code": 0, "msg": "bot not mentioned"}
+else:
+    _other_mentions = []
+```
+
+### 10.2 Bot 发消息时自动 @ 其他被 @ 的 bot
+
+**修改**: `feishu_service.send_message` 支持 `mentions` 参数；回复时如果有 `_other_mentions`，用 `post` 类型消息自动带上 @其他bot。
+
+### 10.3 Bot-to-Bot 一轮限制
+
+**问题**: Bot A @ Bot B → Bot B 回复 → Bot A 继续回复 → 无限循环。
+
+**修改**: 模块级 `_bot_reply_count` 计数器，每 bot 每 chat 只允许回复其他 bot 一次。
+
+```python
+_bot_reply_count: dict[str, dict[str, int]] = {}  # {chat_id: {sender_bot_id: count}}
+
+# 收到 bot 消息时检查
+if _sender_type == "bot" and chat_type == "group" and _bot_open_id:
+    if _bot_reply_count.get(chat_id, {}).get(_sender_open_id, 0) >= 1:
+        return {"code": 0, "msg": "bot-to-bot round limit"}
+
+# 回复成功后记录
+if _sender_type == "bot" and _sender_open_id:
+    _bot_reply_count.setdefault(chat_id, {})[_sender_open_id] = \
+        _bot_reply_count[chat_id].get(_sender_open_id, 0) + 1
+```
+
+### 10.4 智能群上下文（按 bot 最后消息时间戳）
+
+**问题**: 每次固定拉取 10 分钟上下文不科学，应该只拉取 bot 最后一条消息之后的新消息。
+
+```python
+_last_bot_msg_time: dict[str, float] = {}
+
+# 获取上下文
+_last_time = _last_bot_msg_time.get(str(agent_id), 0)
+_params["start_time"] = str(int(_last_time) + 1) if _last_time else ""
+
+# 回复成功后
+_last_bot_msg_time[str(agent_id)] = time.time()
+```
 
 ---
 
-## 15. 升级到 v1.7.2（2026-03-23）
+## 11. Fetch Feishu Group Messages 工具（2026-03-22）
+
+**文件**: 
+- `backend/app/services/tool_seeder.py`（工具定义，`is_default: True`）
+- `backend/app/services/agent_tools.py`（函数实现 `_fetch_feishu_group_messages` + 分发注册）
+
+**功能**: 让 Agent 可以主动获取飞书群的消息记录
+
+**工具参数**:
+- `chat_id`: 群 ID（必填）
+- `limit`: 最大消息数（默认 10，最大 20）
+- `start_time`: 向前秒数（默认 600）
+- `include_own`: 是否包含 bot 消息（默认 true）
+
+**使用**: 后端重启后，管理后台 → Agent → Tools → 安装 `Fetch Feishu Group Messages`。
+
+**工具定义** (tool_seeder.py):
+```python
+def _FETCH_FEISHU_GROUP_MESSAGES():
+    return {
+        "name": "fetch_feishu_group_messages",
+        "description": """Fetch recent messages from a Feishu group chat.\n\nParams:\n- chat_id: Group chat ID (oc_xxx format)\n- limit: Max messages to fetch (default 10, max 20)\n- start_time: Seconds ago to start from (default 600)\n- include_own: Include bot's own messages (default false)""",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat_id": {"type": "string", "description": "The Feishu group chat ID (oc_xxx format)"},
+                "limit": {"type": "integer", "description": "Max messages to fetch (default 10, max 20)"},
+                "start_time": {"type": "integer", "description": "Seconds ago to start from (default 600)"},
+                "include_own": {"type": "boolean", "description": "Include bot's own messages (default false)"},
+            },
+            "required": ["chat_id"],
+        },
+        "is_default": True,
+    }
+```
+
+**工具实现** (agent_tools.py): `_fetch_feishu_group_messages()` 函数
+
+---
+
+## 12. 飞书工具描述更新（2026-03-22）
+
+**文件**: `backend/app/services/tool_seeder.py`
+
+**问题**: Agent 不知道可以在群里 @ 人。
+
+**修改**: 更新工具的 description：
+- `send_message_to_agent`: 加 "In Feishu group chats, you can @ mention the recipient by name (e.g. '@产品经理') to message another bot directly."
+- `send_feishu_message`: 加 "In group chats, you can @ mention the recipient by name (e.g. '张三')"
+
+---
+
+## 13. 数据库迁移（notifications 表）
+
+**问题**: `notifications` 表缺少 `agent_id` 字段，heartbeat 事务失败。
+
+**解决**: 运行 `alembic upgrade head`
+
+---
+
+## 14. 飞书 WebSocket 事件处理修复（2026-03-23）
+
+### 14.1 _bot_open_id 未定义问题
+
+**文件**: `backend/app/api/feishu.py`
+
+**问题**: 第 276 行使用 `_bot_open_id` 时可能还未定义，导致 `UnboundLocalError`。
+
+**修改**: 
+- 初始化 `_bot_open_id = ""` 在判断之前
+- 条件判断改为先检查 `_sender_type == "bot" and chat_type == "group" and chat_id`，再在块内获取 `_bot_open_id`
+
+### 14.2 bot_p2p_chat_entered_v1 事件未注册
+
+**文件**: `backend/app/services/feishu_ws.py`
+
+**问题**: 日志报错 "processor not found, type: im.chat.access_event.bot_p2p_chat_entered_v1"
+
+**修改**: 添加事件注册：
+```python
+.register_p2_customized_event("im.chat.access_event.bot_p2p_chat_entered_v1", handle_message)
+```
+
+### 14.3 fetch_feishu_group_messages 属性名错误
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**问题**: 使用了不存在的 `feishu_app_id` 和 `feishu_app_secret` 属性
+
+**修改**: 改为正确的 `app_id` 和 `app_secret`
+
+### 14.4 write_file 的 enterprise_info 路径映射缺失
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**问题**: `write_file("enterprise_info/产品经理/xxx.md")` 写到了 Agent 自己 workspace，而不是共享的 `enterprise_info_{tenant_id}` 目录。
+
+**修改**: 给 `_write_file` 函数添加 `tenant_id` 参数，并添加与 `_list_files` 相同的 enterprise_info 路径映射逻辑。
+
+### 14.5 Linux 硬编码路径修复（Windows 兼容）
+
+**文件**: 
+- `backend/app/services/agent_tools.py`
+- `backend/app/api/feishu.py`
+
+**问题**: 飞书联系人缓存路径硬编码为 `/data/workspaces/...`
+
+**修改**: 全部改为使用 `WORKSPACE_ROOT`
+
+### 14.6 SyntaxWarning escape sequence
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**问题**: `\_` 语法警告
+
+**修改**: 改为 `r"\_"` (raw string)
+
+### 14.7 前端聊天输入框优化
+
+**文件**: `frontend/src/pages/AgentDetail.tsx`
+
+**修改**:
+- 删除全部 `refetchInterval`（4处）
+- ChatInput 改为 uncontrolled 模式
+- `sendChatMsg` 从 `chatInputRef.current.value` 读取
+
+### 14.8 数据库迁移：llm_models.temperature
+
+**问题**: 新版本需要 `temperature` 字段
+
+**修复**: 
+```sql
+ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
+```
 
 ### 15.1 bot_p2p_chat_entered_v1 事件注册
 

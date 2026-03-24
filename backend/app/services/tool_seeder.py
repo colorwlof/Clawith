@@ -71,9 +71,7 @@ BUILTIN_TOOLS = [
         "is_default": True,
         "parameters_schema": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "File path to delete"}
-            },
+            "properties": {"path": {"type": "string", "description": "File path to delete"}},
             "required": ["path"],
         },
         "config": {},
@@ -88,9 +86,7 @@ BUILTIN_TOOLS = [
         "is_default": True,
         "parameters_schema": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Document file path, e.g.: workspace/report.pdf"}
-            },
+            "properties": {"path": {"type": "string", "description": "Document file path, e.g.: workspace/report.pdf"}},
             "required": ["path"],
         },
         "config": {},
@@ -108,8 +104,15 @@ BUILTIN_TOOLS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Unique name for this trigger"},
-                "type": {"type": "string", "enum": ["cron", "once", "interval", "poll", "on_message"], "description": "Trigger type"},
-                "config": {"type": "object", "description": "Type-specific config. cron: {\"expr\": \"0 9 * * *\"}. once: {\"at\": \"2026-03-10T09:00:00+08:00\"}. interval: {\"minutes\": 30}. poll: {\"url\": \"...\", \"json_path\": \"$.status\"}. on_message: {\"from_agent_name\": \"Morty\"} or {\"from_user_name\": \"张三\"}"},
+                "type": {
+                    "type": "string",
+                    "enum": ["cron", "once", "interval", "poll", "on_message"],
+                    "description": "Trigger type",
+                },
+                "config": {
+                    "type": "object",
+                    "description": 'Type-specific config. cron: {"expr": "0 9 * * *"}. once: {"at": "2026-03-10T09:00:00+08:00"}. interval: {"minutes": 30}. poll: {"url": "...", "json_path": "$.status"}. on_message: {"from_agent_name": "Morty"} or {"from_user_name": "张三"}',
+                },
                 "reason": {"type": "string", "description": "What to do when this trigger fires"},
                 "focus_ref": {"type": "string", "description": "Optional: which focus item this relates to"},
             },
@@ -179,7 +182,10 @@ BUILTIN_TOOLS = [
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "Workspace-relative path to the file"},
-                "member_name": {"type": "string", "description": "Name of the person to send the file to. The system looks up this person across all configured channels and delivers via the appropriate one."},
+                "member_name": {
+                    "type": "string",
+                    "description": "Name of the person to send the file to. The system looks up this person across all configured channels and delivers via the appropriate one.",
+                },
                 "message": {"type": "string", "description": "Optional message to accompany the file"},
             },
             "required": ["file_path"],
@@ -190,7 +196,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_feishu_message",
         "display_name": "Feishu Message",
-        "description": "Send a message to a human colleague via Feishu. Can only message people in your relationships.",
+        "description": "Send a message to a human colleague via Feishu. In group chats, you can @ mention the recipient by name (e.g. '张三') — the message will be posted in the group and the mentioned person will be notified. Can only message people in your relationships.",
         "category": "communication",
         "icon": "💬",
         "is_default": True,
@@ -226,7 +232,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_message_to_agent",
         "display_name": "Agent Message",
-        "description": "Send a message to a digital employee colleague and receive a reply. Suitable for questions, delegation, or collaboration.",
+        "description": "Send a message to a digital employee colleague and receive a reply. In Feishu group chats, you can @ mention the recipient by name (e.g. '@产品经理') to message another bot directly. Suitable for questions, delegation, or collaboration.",
         "category": "communication",
         "icon": "🤖",
         "is_default": True,
@@ -235,7 +241,11 @@ BUILTIN_TOOLS = [
             "properties": {
                 "agent_name": {"type": "string", "description": "Target agent name"},
                 "message": {"type": "string", "description": "Message content"},
-                "msg_type": {"type": "string", "enum": ["chat", "task_request", "info_share"], "description": "Message type"},
+                "msg_type": {
+                    "type": "string",
+                    "enum": ["chat", "task_request", "info_share"],
+                    "description": "Message type",
+                },
             },
             "required": ["agent_name", "message"],
         },
@@ -392,7 +402,11 @@ BUILTIN_TOOLS = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Max number of posts to return (default 10)", "default": 10},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of posts to return (default 10)",
+                    "default": 10,
+                },
             },
         },
         "config": {},
@@ -443,7 +457,11 @@ BUILTIN_TOOLS = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "language": {"type": "string", "enum": ["python", "bash", "node"], "description": "Programming language"},
+                "language": {
+                    "type": "string",
+                    "enum": ["python", "bash", "node"],
+                    "description": "Programming language",
+                },
                 "code": {"type": "string", "description": "Code to execute"},
                 "timeout": {"type": "integer", "description": "Max execution time in seconds (default 30, max 60)"},
             },
@@ -452,8 +470,22 @@ BUILTIN_TOOLS = [
         "config": {"default_timeout": 30, "max_timeout": 60},
         "config_schema": {
             "fields": [
-                {"key": "default_timeout", "label": "Default Timeout (seconds)", "type": "number", "default": 30, "min": 5, "max": 120},
-                {"key": "max_timeout", "label": "Max Timeout (seconds)", "type": "number", "default": 60, "min": 10, "max": 120},
+                {
+                    "key": "default_timeout",
+                    "label": "Default Timeout (seconds)",
+                    "type": "number",
+                    "default": 30,
+                    "min": 5,
+                    "max": 120,
+                },
+                {
+                    "key": "max_timeout",
+                    "label": "Max Timeout (seconds)",
+                    "type": "number",
+                    "default": 60,
+                    "min": 10,
+                    "max": 120,
+                },
             ]
         },
     },
@@ -503,7 +535,10 @@ BUILTIN_TOOLS = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Semantic description of the capability needed, e.g. 'send email', 'query SQL database', 'generate images'"},
+                "query": {
+                    "type": "string",
+                    "description": "Semantic description of the capability needed, e.g. 'send email', 'query SQL database', 'generate images'",
+                },
                 "max_results": {"type": "integer", "description": "Max results to return (default 5, max 10)"},
             },
             "required": ["query"],
@@ -538,8 +573,14 @@ BUILTIN_TOOLS = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "server_id": {"type": "string", "description": "Smithery server ID, e.g. '@anthropic/brave-search' or '@anthropic/fetch'"},
-                "config": {"type": "object", "description": "Optional server configuration (e.g. API keys required by the server)"},
+                "server_id": {
+                    "type": "string",
+                    "description": "Smithery server ID, e.g. '@anthropic/brave-search' or '@anthropic/fetch'",
+                },
+                "config": {
+                    "type": "object",
+                    "description": "Optional server configuration (e.g. API keys required by the server)",
+                },
             },
             "required": ["server_id"],
         },
@@ -594,13 +635,48 @@ BUILTIN_TOOLS = [
                     "label": "Email Provider",
                     "type": "select",
                     "options": [
-                        {"value": "gmail", "label": "Gmail", "help_text": "Google Account → Security → App passwords → Generate app password", "help_url": "https://support.google.com/accounts/answer/185833"},
-                        {"value": "outlook", "label": "Outlook / Microsoft 365", "help_text": "Microsoft Account → Security → App passwords", "help_url": "https://support.microsoft.com/en-us/account-billing/manage-app-passwords-for-two-step-verification-d6dc8c6d-4bf7-4851-ad95-6d07799387e9"},
-                        {"value": "qq", "label": "QQ Mail", "help_text": "Settings → Account → POP3/IMAP/SMTP → Enable IMAP → Generate authorization code", "help_url": "https://service.mail.qq.com/detail/0/310"},
-                        {"value": "163", "label": "163 Mail", "help_text": "Settings → POP3/SMTP/IMAP → Enable IMAP → Set authorization code", "help_url": "https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac2"},
-                        {"value": "qq_enterprise", "label": "Tencent Enterprise Mail", "help_text": "Enterprise Mail → Settings → Client-specific password → Generate new password", "help_url": "https://open.work.weixin.qq.com/help2/pc/18624"},
-                        {"value": "aliyun", "label": "Alibaba Enterprise Mail", "help_text": "Use your email password directly", "help_url": ""},
-                        {"value": "custom", "label": "Custom", "help_text": "Use the authorization code or app password from your email provider", "help_url": ""},
+                        {
+                            "value": "gmail",
+                            "label": "Gmail",
+                            "help_text": "Google Account → Security → App passwords → Generate app password",
+                            "help_url": "https://support.google.com/accounts/answer/185833",
+                        },
+                        {
+                            "value": "outlook",
+                            "label": "Outlook / Microsoft 365",
+                            "help_text": "Microsoft Account → Security → App passwords",
+                            "help_url": "https://support.microsoft.com/en-us/account-billing/manage-app-passwords-for-two-step-verification-d6dc8c6d-4bf7-4851-ad95-6d07799387e9",
+                        },
+                        {
+                            "value": "qq",
+                            "label": "QQ Mail",
+                            "help_text": "Settings → Account → POP3/IMAP/SMTP → Enable IMAP → Generate authorization code",
+                            "help_url": "https://service.mail.qq.com/detail/0/310",
+                        },
+                        {
+                            "value": "163",
+                            "label": "163 Mail",
+                            "help_text": "Settings → POP3/SMTP/IMAP → Enable IMAP → Set authorization code",
+                            "help_url": "https://help.mail.163.com/faqDetail.do?code=d7a5dc8471cd0c0e8b4b8f4f8e49998b374173cfe9171305fa1ce630d7f67ac2",
+                        },
+                        {
+                            "value": "qq_enterprise",
+                            "label": "Tencent Enterprise Mail",
+                            "help_text": "Enterprise Mail → Settings → Client-specific password → Generate new password",
+                            "help_url": "https://open.work.weixin.qq.com/help2/pc/18624",
+                        },
+                        {
+                            "value": "aliyun",
+                            "label": "Alibaba Enterprise Mail",
+                            "help_text": "Use your email password directly",
+                            "help_url": "",
+                        },
+                        {
+                            "value": "custom",
+                            "label": "Custom",
+                            "help_text": "Use the authorization code or app password from your email provider",
+                            "help_url": "",
+                        },
                     ],
                     "default": "gmail",
                 },
@@ -657,8 +733,15 @@ BUILTIN_TOOLS = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Max number of emails to return (default 10, max 30)", "default": 10},
-                "search": {"type": "string", "description": "IMAP search criteria, e.g. 'FROM \"john@example.com\"', 'SUBJECT \"meeting\"', 'SINCE 01-Mar-2026'. Default: all emails."},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of emails to return (default 10, max 30)",
+                    "default": 10,
+                },
+                "search": {
+                    "type": "string",
+                    "description": "IMAP search criteria, e.g. 'FROM \"john@example.com\"', 'SUBJECT \"meeting\"', 'SINCE 01-Mar-2026'. Default: all emails.",
+                },
                 "folder": {"type": "string", "description": "Mailbox folder (default INBOX)", "default": "INBOX"},
             },
         },
@@ -675,7 +758,10 @@ BUILTIN_TOOLS = [
         "parameters_schema": {
             "type": "object",
             "properties": {
-                "message_id": {"type": "string", "description": "Message-ID of the email to reply to (from read_emails output)"},
+                "message_id": {
+                    "type": "string",
+                    "description": "Message-ID of the email to reply to (from read_emails output)",
+                },
                 "body": {"type": "string", "description": "Reply body text"},
             },
             "required": ["message_id", "body"],
@@ -689,7 +775,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_feishu_message",
         "display_name": "Feishu Message",
-        "description": "Send a message to a human colleague via Feishu. Can only message people in your relationships.",
+        "description": "Send a message to a human colleague via Feishu. In group chats, you can @ mention the recipient by name (e.g. '张三') — the message will be posted in the group and the mentioned person will be notified. Can only message people in your relationships.",
         "category": "feishu",
         "icon": "💬",
         "is_default": False,
@@ -700,6 +786,26 @@ BUILTIN_TOOLS = [
                 "message": {"type": "string", "description": "Message content"},
             },
             "required": ["member_name", "message"],
+        },
+        "config": {},
+        "config_schema": {},
+    },
+    {
+        "name": "fetch_feishu_group_messages",
+        "display_name": "Fetch Feishu Group Messages",
+        "description": "Fetch recent messages from a Feishu group chat. Useful for catching up on group conversations. Params:\n- chat_id: Group chat ID (oc_xxx format)\n- limit: Max messages to fetch (default 10, max 20)\n- start_time: Seconds ago to start from (default 600)\n- include_own: Include bot's own messages (default false)",
+        "category": "feishu",
+        "icon": "📜",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "chat_id": {"type": "string", "description": "The Feishu group chat ID (oc_xxx format)"},
+                "limit": {"type": "integer", "description": "Max messages to fetch (default 10, max 20)"},
+                "start_time": {"type": "integer", "description": "Seconds ago to start from (default 600)"},
+                "include_own": {"type": "boolean", "description": "Include bot's own messages (default true)"},
+            },
+            "required": ["chat_id"],
         },
         "config": {},
         "config_schema": {},
@@ -807,7 +913,11 @@ BUILTIN_TOOLS = [
                 "start_time": {"type": "string", "description": "Event start in ISO 8601 with timezone"},
                 "end_time": {"type": "string", "description": "Event end in ISO 8601 with timezone"},
                 "description": {"type": "string", "description": "Event description or agenda"},
-                "attendee_names": {"type": "array", "items": {"type": "string"}, "description": "Names of colleagues to invite"},
+                "attendee_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Names of colleagues to invite",
+                },
                 "location": {"type": "string", "description": "Event location"},
             },
             "required": ["summary", "start_time", "end_time"],
@@ -1016,6 +1126,7 @@ async def seed_atlassian_rovo_config():
     so the platform is immediately ready without manual UI setup.
     """
     import os
+
     env_key = os.environ.get("ATLASSIAN_API_KEY", "").strip()
 
     async with async_session() as db:

@@ -1,6 +1,7 @@
 """Feishu OAuth and Channel API routes."""
 
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from loguru import logger
@@ -10,12 +11,62 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.permissions import check_agent_access, is_agent_creator, is_agent_expired
 from app.core.security import get_current_user
 from app.database import get_db
+from app.config import Settings
 from app.models.channel_config import ChannelConfig
 from app.models.user import User
 from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut, TokenResponse, UserOut
 from app.services.feishu_service import feishu_service
 
 router = APIRouter(tags=["feishu"])
+
+
+# ─── Module-level state for multi-agent collaboration ──────────────────────────
+
+_bot_reply_count: dict[str, dict[str, int]] = {}  # {chat_id: {sender_bot_open_id: count}}
+
+_last_bot_msg_time: dict[str, float] = {}  # {str(agent_id): last_message_timestamp}
+
+
+async def _get_bot_open_id(agent_id: uuid.UUID) -> str | None:
+    """Get the bot's open_id using the Feishu API."""
+    import httpx
+    from app.database import async_session as _async_session
+
+    async with _async_session() as db:
+        result = await db.execute(select(ChannelConfig).where(ChannelConfig.agent_id == agent_id))
+        config = result.scalar_one_or_none()
+        if not config or not config.app_id or not config.app_secret:
+            logger.warning(f"[Feishu] No Feishu config for agent {agent_id}")
+            return None
+
+        try:
+            async with httpx.AsyncClient() as client:
+                token_resp = await client.post(
+                    "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                    json={"app_id": config.app_id, "app_secret": config.app_secret},
+                    timeout=10,
+                )
+                token_data = token_resp.json()
+                if token_data.get("code") != 0:
+                    logger.warning(f"[Feishu] Token error: {token_data.get('msg')}")
+                    return None
+
+                access_token = token_data.get("tenant_access_token")
+
+                bot_resp = await client.get(
+                    "https://open.feishu.cn/open-apis/bot/v3/info",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=10,
+                )
+                bot_data = bot_resp.json()
+                if bot_data.get("code") != 0:
+                    logger.warning(f"[Feishu] Bot info error: {bot_data.get('msg')}")
+                    return None
+
+                return bot_data.get("bot", {}).get("open_id")
+        except Exception as e:
+            logger.warning(f"[Feishu] Failed to get bot open_id: {e}")
+            return None
 
 
 # ─── OAuth ──────────────────────────────────────────────
@@ -242,37 +293,50 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
 
         logger.info(f"[Feishu] Received {msg_type} message, chat_type={chat_type}, from={sender_open_id}")
 
+        _bot_open_id = ""
+        _other_mentions = []
+        _mentioned_humans = []
+
         # ── Group chat: only reply if bot was mentioned ──
         if chat_type == "group":
-            _bot_open_id = ""
-            try:
-                _app_token_resp = await feishu_service.get_tenant_access_token(config.app_id, config.app_secret)
-                _app_token = _app_token_resp.get("tenant_access_token", "")
-                _bot_info_resp = feishu_service._sync_get(
-                    "https://open.feishu.cn/open-apis/auth/v3/bot/info",
-                    headers={"Authorization": f"Bearer {_app_token}"},
-                )
-                if hasattr(_bot_info_resp, "json"):
-                    _bot_info = _bot_info_resp.json()
-                else:
-                    _bot_info = _bot_info_resp
-                _bot_open_id = (_bot_info.get("data") or {}).get("open_id", "")
-            except Exception:
-                pass
+            _sender_type = (body.get("event", {}).get("sender", {}) or {}).get("sender_type", "user")
+            _sender_open_id = (body.get("event", {}).get("sender", {}) or {}).get("id", "")
 
             _mentioned_open_ids = []
-            _mention_list = message.get("mention", [])
+            _mention_list = message.get("mention", []) or message.get("mentions", [])
             for _m in _mention_list:
                 if isinstance(_m, dict):
                     _id = _m.get("id", {})
                     if isinstance(_id, dict):
                         _mentioned_open_ids.append(_id.get("open_id", ""))
-                    else:
-                        _mentioned_open_ids.append(str(_id))
 
-            if _bot_open_id and _bot_open_id not in _mentioned_open_ids:
-                logger.info(f"[Feishu] Bot not mentioned in group, ignoring")
-                return {"code": 0, "msg": "bot not mentioned"}
+            if _mentioned_open_ids:
+                _bot_open_id = await _get_bot_open_id(agent_id)
+                logger.info(f"[Feishu] Bot open_id: {_bot_open_id}, Mentioned IDs: {_mentioned_open_ids}")
+                _other_mentions = [
+                    _m for _m in _mention_list if (_m.get("id") or {}).get("open_id", "") != _bot_open_id
+                ]
+                # Also track the humans who mentioned this bot (for @-back)
+                _mentioned_humans = [
+                    _m for _m in _mention_list if (_m.get("id") or {}).get("open_id", "") == _bot_open_id
+                ]
+                logger.info(f"[Feishu] Other mentions (bots): {_other_mentions}")
+                logger.info(f"[Feishu] Mentioned humans: {_mentioned_humans}")
+                if _bot_open_id and _bot_open_id not in _mentioned_open_ids:
+                    logger.info(
+                        f"[Feishu] Bot {_bot_open_id} not mentioned, skipping. Mentioned: {_mentioned_open_ids}"
+                    )
+                    return {"code": 0, "msg": "bot not mentioned"}
+            else:
+                _other_mentions = []
+                _mentioned_humans = []
+                logger.info(f"[Feishu] No mentions, all bots should reply")
+
+            # ── Bot-to-Bot round limit ──
+            if _sender_type == "bot" and chat_type == "group" and _bot_open_id:
+                if _bot_reply_count.get(chat_id, {}).get(_sender_open_id, 0) >= 1:
+                    logger.info(f"[Feishu] Bot-to-bot round limit reached, skipping")
+                    return {"code": 0, "msg": "bot-to-bot round limit"}
 
         # ── Normalize post (rich text) → extract text + schedule image downloads ──
         if msg_type == "post":
@@ -317,7 +381,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 from app.config import get_settings as _post_gs
 
                 _post_settings = _post_gs()
-                _upload_dir = _PostPath(_post_settings.AGENT_DATA_DIR) / str(agent_id) / "workspace" / "uploads"
+                _upload_dir = _PostPath(str(Settings().AGENT_DATA_DIR)) / str(agent_id) / "workspace" / "uploads"
                 _upload_dir.mkdir(parents=True, exist_ok=True)
                 for _ik in _post_image_keys:
                     try:
@@ -441,7 +505,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                                     import pathlib as _pl, json as _cj, time as _ct
 
                                     _safe_id = str(agent_id).replace("..", "").replace("/", "")
-                                    _cache = WORKSPACE_ROOT / _safe_id / "feishu_contacts_cache.json"
+                                    _agent_dir = str(Settings().AGENT_DATA_DIR)
+                                    _cache = _pl.Path(_agent_dir) / _safe_id / "feishu_contacts_cache.json"
                                     _cache.parent.mkdir(parents=True, exist_ok=True)
                                     _existing = {}
                                     if _cache.exists():
@@ -552,7 +617,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 import pathlib as _pl
                 from app.config import get_settings as _gs
 
-                _upload_dir = _pl.Path(_gs().AGENT_DATA_DIR) / str(agent_id) / "workspace" / "uploads"
+                _upload_dir = _pl.Path(str(Settings().AGENT_DATA_DIR)) / str(agent_id) / "workspace" / "uploads"
                 _recent_file_path = None
                 if _upload_dir.exists() and "uploads/" not in user_text and "workspace/" not in user_text:
                     _now = _time.time()
@@ -567,7 +632,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                             break
                 if _recent_file_path:
                     # _recent_file_path is relative to uploads dir; agent workspace root is
-                    # AGENT_DATA_DIR/{agent_id}/, so the correct relative path is workspace/uploads/
+                    # Path(Settings().AGENT_DATA_DIR)/{agent_id}/, so the correct relative path is workspace/uploads/
                     _ws_rel_path = f"workspace/{_recent_file_path}"
                     llm_user_text = (
                         llm_user_text + f"\n\n[系统提示：用户刚上传了文件，路径为工作区 `{_ws_rel_path}`。"
@@ -579,13 +644,14 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 logger.error(f"[Feishu] File injection error: {_fe}")
 
             # ── Inject group chat context for multi-agent collaboration ──
-            # When bot is mentioned, fetch recent group messages so the AI can see
-            # what other bots/agents said and decide if it should reply.
+            # Only for group chats, when bot is mentioned
             if chat_type == "group" and chat_id:
                 try:
                     import time as _grp_time
 
                     async def _fetch_group_context() -> str:
+                        import time as _grp_time
+
                         _app_token = ""
                         try:
                             _resp = await feishu_service.get_tenant_access_token(config.app_id, config.app_secret)
@@ -601,7 +667,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                             "start_time": str(int(_grp_time.time()) - 600),
                             "end_time": str(int(_grp_time.time())),
                             "sort_type": "ByCreateTimeAsc",
-                            "page_size": 20,
+                            "page_size": 50,
                         }
                         try:
                             _msgs_resp = feishu_service._sync_get(
@@ -707,9 +773,36 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
             _FLUSH_INTERVAL = 1.0  # Update Feishu once per second to avoid limits
             _agent_name = agent_obj.name if agent_obj else "AI 回复"
 
-            def _build_card(answer_text: str, thinking_text: str = "", streaming: bool = False) -> dict:
+            def _build_card(
+                answer_text: str,
+                thinking_text: str = "",
+                streaming: bool = False,
+                other_mentions: list = None,
+                mentioned_humans: list = None,
+            ) -> dict:
                 """Build interactive card. Thinking shown in collapsible grey section."""
+                if other_mentions is None:
+                    other_mentions = []
+                if mentioned_humans is None:
+                    mentioned_humans = []
                 elements = []
+
+                # ── Add @mentions for other bots and humans if any ──
+                _all_mentions = list(other_mentions) + list(mentioned_humans)
+                if _all_mentions:
+                    mention_tags = []
+                    for _m in _all_mentions:
+                        _mention_id = (_m.get("id") or {}).get("open_id", "")
+                        if _mention_id:
+                            mention_tags.append({"tag": "at", "user_id": _mention_id})
+                    if mention_tags:
+                        elements.append(
+                            {
+                                "tag": "markdown",
+                                "content": " ".join([f"<at id='{t['user_id']}'></at>" for t in mention_tags]) + " ",
+                            }
+                        )
+
                 if thinking_text:
                     # Show thinking in a collapsible note block
                     think_preview = thinking_text[:200].replace("\n", " ")
@@ -742,6 +835,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                         "".join(_stream_buffer),
                         "".join(_thinking_buffer),
                         streaming=True,
+                        other_mentions=_other_mentions,
+                        mentioned_humans=_mentioned_humans if "_mentioned_humans" in dir() else [],
                     )
                     _aio.create_task(
                         feishu_service.patch_message(
@@ -761,6 +856,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                         "".join(_stream_buffer),
                         "".join(_thinking_buffer),
                         streaming=True,
+                        other_mentions=_other_mentions,
+                        mentioned_humans=_mentioned_humans if "_mentioned_humans" in dir() else [],
                     )
                     _aio.create_task(
                         feishu_service.patch_message(
@@ -779,8 +876,6 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 on_chunk=_ws_on_chunk,
                 on_thinking=_ws_on_thinking,
             )
-            _cfs.reset(_cfs_token)
-            _cfso.reset(_cfso_token)
             logger.info(f"[Feishu] LLM reply: {reply_text[:100]}")
 
             # Send final card update or fallback text
@@ -789,6 +884,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                     reply_text,
                     "".join(_thinking_buffer),
                     streaming=False,
+                    other_mentions=_other_mentions,
+                    mentioned_humans=_mentioned_humans if "_mentioned_humans" in dir() else [],
                 )
                 await feishu_service.patch_message(
                     config.app_id, config.app_secret, msg_id_for_patch, _json_card.dumps(final_card)
@@ -796,13 +893,29 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
             else:
                 # Fallback to plain text if card creation failed
                 try:
+                    # Add @mentions for bots and humans text prefix if any
+                    _mention_text = ""
+                    _all_mentions_for_text = (
+                        list(_other_mentions) + list(_mentioned_humans)
+                        if "_mentioned_humans" in dir()
+                        else _other_mentions
+                    )
+                    if _all_mentions_for_text:
+                        _mention_ids = []
+                        for _m in _all_mentions_for_text:
+                            _mid = (_m.get("id") or {}).get("open_id", "")
+                            if _mid:
+                                _mention_ids.append(f"<at id='{_mid}'></at>")
+                        if _mention_ids:
+                            _mention_text = " ".join(_mention_ids) + " "
+
                     if chat_type == "group" and chat_id:
                         await feishu_service.send_message(
                             config.app_id,
                             config.app_secret,
                             chat_id,
                             "text",
-                            json.dumps({"text": reply_text}),
+                            json.dumps({"text": _mention_text + reply_text}),
                             receive_id_type="chat_id",
                         )
                     else:
@@ -811,7 +924,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                             config.app_secret,
                             sender_open_id,
                             "text",
-                            json.dumps({"text": reply_text}),
+                            json.dumps({"text": _mention_text + reply_text}),
                         )
                 except Exception as e:
                     logger.error(f"[Feishu] Failed to send fallback message: {e}")
@@ -870,6 +983,15 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
             _sess.last_message_at = _dt.now(_tz.utc)
             await db.commit()
 
+            # ── Update bot-to-bot round count ──
+            if _sender_type == "bot" and _sender_open_id:
+                _bot_reply_count.setdefault(chat_id, {})[_sender_open_id] = (
+                    _bot_reply_count[chat_id].get(_sender_open_id, 0) + 1
+                )
+
+            # ── Update last bot message timestamp ──
+            _last_bot_msg_time[str(agent_id)] = _dt.now().timestamp()
+
     return {"code": 0, "msg": "ok"}
 
 
@@ -918,7 +1040,7 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
 
     # Resolve workspace upload dir
     settings = get_settings()
-    upload_dir = Path(settings.AGENT_DATA_DIR) / str(agent_id) / "workspace" / "uploads"
+    upload_dir = Path(str(Settings().AGENT_DATA_DIR)) / str(agent_id) / "workspace" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     save_path = upload_dir / filename
 
@@ -1254,7 +1376,7 @@ async def _download_post_images(agent_id, config, message_id, image_keys):
     from app.config import get_settings
 
     settings = get_settings()
-    upload_dir = Path(settings.AGENT_DATA_DIR) / str(agent_id) / "workspace" / "uploads"
+    upload_dir = Path(str(Settings().AGENT_DATA_DIR)) / str(agent_id) / "workspace" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     for ik in image_keys:

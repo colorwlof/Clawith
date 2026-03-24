@@ -726,7 +726,6 @@ function AgentDetailInner() {
         queryKey: ['triggers', id],
         queryFn: () => triggerApi.list(id!),
         enabled: !!id && activeTab === 'aware',
-        refetchInterval: activeTab === 'aware' ? 5000 : false,
     });
 
     // ── Aware tab data: focus.md ──
@@ -754,7 +753,6 @@ function AgentDetailInner() {
             return all.filter((s: any) => s.source_channel === 'trigger');
         },
         enabled: !!id && activeTab === 'aware',
-        refetchInterval: activeTab === 'aware' ? 10000 : false,
     });
 
     // ── Aware tab state ──
@@ -804,7 +802,6 @@ function AgentDetailInner() {
         queryKey: ['activity', id],
         queryFn: () => activityApi.list(id!, 100),
         enabled: !!id && (activeTab === 'activityLog' || activeTab === 'status'),
-        refetchInterval: activeTab === 'activityLog' ? 10000 : false,
     });
 
     // Chat history
@@ -1039,7 +1036,6 @@ function AgentDetailInner() {
     };
     interface ChatMsg { role: 'user' | 'assistant' | 'tool_call'; content: string; fileName?: string; toolName?: string; toolArgs?: any; toolStatus?: 'running' | 'done'; toolResult?: string; thinking?: string; imageUrl?: string; timestamp?: string; }
     const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
-    const [chatInput, setChatInput] = useState('');
     const [wsConnected, setWsConnected] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [isWaiting, setIsWaiting] = useState(false);
@@ -1400,9 +1396,10 @@ function AgentDetailInner() {
         const activeRuntimeKey = buildSessionRuntimeKey(id, String(activeSession.id));
         const activeSocket = wsMapRef.current[activeRuntimeKey];
         if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) return;
-        if (!chatInput.trim() && attachedFiles.length === 0) return;
+        const chatInputValue = chatInputRef.current?.value || '';
+        if (!chatInputValue.trim() && attachedFiles.length === 0) return;
         
-        let userMsg = chatInput.trim();
+        let userMsg = chatInputValue.trim();
         let contentForLLM = userMsg;
         let displayFiles = '';
 
@@ -1450,8 +1447,9 @@ function AgentDetailInner() {
             file_name: attachedFiles.map(f => f.name).join(', ') 
         }));
         
-        setChatInput(''); 
         setAttachedFiles([]);
+        if (chatInputRef.current) chatInputRef.current.value = '';
+        if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     const handleChatFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3521,7 +3519,7 @@ function AgentDetailInner() {
                                                     <button onClick={() => { uploadAbortRef.current?.(); }} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: '12px', padding: '0 2px', lineHeight: 1 }} title="Cancel upload">✕</button>
                                                 </div>
                                             )}
-                                            <input ref={chatInputRef} className="chat-input" value={chatInput} onChange={e => setChatInput(e.target.value)}
+                                            <input ref={chatInputRef} className="chat-input"
                                                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); sendChatMsg(); } }}
                                                 onPaste={handlePaste}
                                                 placeholder={!wsConnected && (!activeSession?.user_id || !currentUser || activeSession.user_id === String(currentUser?.id)) ? 'Connecting...' : attachedFiles.length > 0 ? t('agent.chat.askAboutFile', { name: attachedFiles.length === 1 ? attachedFiles[0].name : `${attachedFiles.length} files` }) : t('chat.placeholder')}
@@ -3541,7 +3539,7 @@ function AgentDetailInner() {
                                                     <span className="stop-icon" />
                                                 </button>
                                             ) : (
-                                                <button className="btn btn-primary" onClick={sendChatMsg} disabled={!wsConnected || (!chatInput.trim() && attachedFiles.length === 0)} style={{ padding: '6px 16px' }}>{t('chat.send')}</button>
+                                                <button className="btn btn-primary" onClick={sendChatMsg} disabled={!wsConnected || (!chatInputRef.current?.value?.trim() && attachedFiles.length === 0)} style={{ padding: '6px 16px' }}>{t('chat.send')}</button>
                                             )}
                                         </div>
                                     </>
@@ -3683,7 +3681,6 @@ function AgentDetailInner() {
                                 queryKey: ['agent-approvals', id],
                                 queryFn: () => fetchAuth<any[]>(`/agents/${id}/approvals`),
                                 enabled: !!id,
-                                refetchInterval: 15000,
                             });
                             const resolveMut = useMutation({
                                 mutationFn: async ({ approvalId, action }: { approvalId: string; action: string }) => {

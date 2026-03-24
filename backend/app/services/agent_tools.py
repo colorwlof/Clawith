@@ -13,6 +13,7 @@ The agent reads/writes these files directly. No per-concept tools needed.
 """
 
 import json
+import re
 import os
 import uuid
 from contextvars import ContextVar
@@ -20,6 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
+
+import sys as _sys
+
+if _sys.platform == "win32":
+    import asyncio as _asyncio
+
+    _asyncio.set_event_loop_policy(_asyncio.WindowsProactorEventLoopPolicy())
 
 from sqlalchemy import select
 
@@ -1273,6 +1281,8 @@ async def execute_tool(
             result = await _feishu_doc_share(agent_id, arguments)
         elif tool_name == "feishu_user_search":
             result = await _feishu_user_search(agent_id, arguments)
+        elif tool_name == "fetch_feishu_group_messages":
+            result = await _fetch_feishu_group_messages(agent_id, arguments)
         elif tool_name == "feishu_calendar_list":
             result = await _feishu_calendar_list(agent_id, arguments)
         elif tool_name == "feishu_calendar_create":
@@ -3825,13 +3835,17 @@ async def _execute_code(ws: Path, arguments: dict) -> str:
     work_dir = (ws / "workspace").resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine command and file extension
+    # Determine command and file extension (Windows-compatible)
+    import platform
+
+    is_windows = platform.system() == "Windows"
+
     if language == "python":
         ext = ".py"
-        cmd_prefix = ["python3"]
+        cmd_prefix = ["python"] if is_windows else ["python3"]
     elif language == "bash":
-        ext = ".sh"
-        cmd_prefix = ["bash"]
+        ext = ".bat"
+        cmd_prefix = ["powershell", "-Command"]
     elif language == "node":
         ext = ".js"
         cmd_prefix = ["node"]
@@ -3864,8 +3878,23 @@ async def _execute_code(ws: Path, arguments: dict) -> str:
             await proc.communicate()
             return f"❌ Code execution timed out after {timeout}s"
 
-        stdout_str = stdout.decode("utf-8", errors="replace")[:10000]
-        stderr_str = stderr.decode("utf-8", errors="replace")[:5000]
+        if _sys.platform == "win32":
+
+            def _try_decode_win(data):
+                if not data:
+                    return ""
+                if len(data) >= 2 and data[:2] == b"\xff\xfe":
+                    return data[2:].decode("utf-16-le", errors="replace")
+                null_count = sum(1 for i in range(1, min(len(data), 1000), 2) if data[i] == 0)
+                if null_count / max(len(data) // 2, 1) > 0.3:
+                    return data.decode("utf-16-le", errors="replace")
+                return data.decode("gbk", errors="replace")
+
+            stdout_str = _try_decode_win(stdout)[:10000]
+            stderr_str = _try_decode_win(stderr)[:5000]
+        else:
+            stdout_str = stdout.decode("utf-8", errors="replace")[:10000]
+            stderr_str = stderr.decode("utf-8", errors="replace")[:5000]
 
         result_parts = []
         if stdout_str.strip():
@@ -4173,7 +4202,7 @@ async def _handle_cancel_trigger(agent_id: uuid.UUID, arguments: dict) -> str:
             if not trigger:
                 return f"❌ Trigger '{name}' not found"
             if not trigger.is_enabled:
-                return f"ℹ️ Trigger '{name}' is already disabled"
+                return f"[i] Trigger '{name}' is already disabled"
 
             trigger.is_enabled = False
             await db.commit()
@@ -5572,14 +5601,153 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: dict) -> str:
 
 async def _feishu_contacts_refresh(agent_id: uuid.UUID) -> None:
     """Force-clear the local contacts cache so next search re-fetches from API."""
-    import pathlib as _pl
-
-    _cache_file = _pl.Path("/data/workspaces") / str(agent_id) / "feishu_contacts_cache.json"
+    _cache_file = WORKSPACE_ROOT / str(agent_id) / "feishu_contacts_cache.json"
     try:
         if _cache_file.exists():
             _cache_file.unlink()
     except Exception:
         pass
+
+
+# ─── Feishu Group Messages ───────────────────────────────────
+
+
+async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> str:
+    """Fetch recent messages from a Feishu group chat."""
+    import httpx
+    import time as _time
+
+    chat_id = (arguments.get("chat_id") or "").strip()
+    if not chat_id:
+        return "❌ Missing required argument 'chat_id'"
+
+    # Validate chat_id is a group chat (starts with oc_)
+    if not chat_id.startswith("oc_"):
+        return "❌ chat_id must be a group chat ID (oc_xxx format)"
+
+    limit = min(int(arguments.get("limit", 10)), 20)
+    _st = arguments.get("start_time", "600")
+    start_time = int(_st) if _st else 0
+    include_own = arguments.get("include_own", True)
+
+    creds = await _get_feishu_token(agent_id)
+    if not creds:
+        return "❌ Agent has no Feishu channel configured."
+
+    app_id, _access_token = creds
+
+    try:
+        async with httpx.AsyncClient() as _c:
+            # Calculate start_time
+            _now = int(_time.time())
+            _params = {
+                "container_id": chat_id,
+                "container_id_type": "chat",
+                "start_time": str(_now - start_time),
+                "end_time": str(_now),
+                "page_size": str(limit),
+                "sort_type": "ByCreateTimeDesc",
+            }
+
+            _mr = await _c.get(
+                "https://open.feishu.cn/open-apis/im/v1/messages",
+                headers={"Authorization": f"Bearer {_access_token}"},
+                params=_params,
+            )
+            _mr_data = _mr.json()
+
+            if _mr_data.get("code") != 0:
+                return f"❌ Fetch error: {_mr_data.get('msg')}"
+
+            _items = _mr_data.get("data", {}).get("items", [])
+            if not _items:
+                return "=== 群消息记录（共 0 条）===\n暂无消息"
+
+            # Build message list
+            _lines = []
+            _count = 0
+            for _item in _items:
+                if _count >= limit:
+                    break
+                _sender = _item.get("sender", {})
+                _sender_type = _sender.get("sender_type", "unknown")
+                _sender_id = _sender.get("id", "unknown")
+
+                # Filter bot messages if not including own
+                if not include_own and _sender_type == "bot":
+                    continue
+
+                _msg_type = _item.get("msg_type", "text")
+                _content_str = _item.get("body", {}).get("content", "{}")
+                try:
+                    _content = _json.loads(_content_str) if isinstance(_content_str, str) else _content_str
+                except Exception:
+                    _content = {"text": _content_str}
+
+                # Extract text content and mentions
+                _text = ""
+                _mentions_str = ""
+
+                # Extract mentions from content (for text messages)
+                if _msg_type == "text":
+                    _text = _content.get("text", "")
+                    # Find @mentions in text
+                    _mention_matches = _re.findall(r"<at id='([^']+)'></at>", _text) if "re" in dir() else []
+                    if _mention_matches:
+                        _mentions_str = f" [收到@: {len(_mention_matches)}人]"
+                elif _msg_type == "post":
+                    for _para in _content.get("zh_cn", {}).get("content", []):
+                        for _t in _para:
+                            if isinstance(_t, dict) and _t.get("tag") == "at":
+                                _mention_name = _t.get("name", "未知")
+                                _mention_id = _t.get("user_id", "")
+                                if not _mentions_str:
+                                    _mentions_str = f" [收到@: {_mention_name}"
+                                else:
+                                    _mentions_str += f", {_mention_name}"
+                    if _mentions_str:
+                        _mentions_str += "]"
+                    for _para in _content.get("zh_cn", {}).get("content", []):
+                        for _t in _para:
+                            if isinstance(_t, dict):
+                                _text += _t.get("text", "")
+                    if not _text:
+                        _text = "[富文本消息]"
+                elif _msg_type == "interactive":
+                    # 解析 interactive 卡片消息
+                    _elements = _content.get("elements", [])
+                    for _row in _elements:
+                        if isinstance(_row, list):
+                            for _col in _row:
+                                _tag = _col.get("tag", "")
+                                if _tag == "text":
+                                    _text += _col.get("text", "")
+                                elif _tag == "at":
+                                    _text += f"@{_col.get('user_name', '')} "
+                        elif isinstance(_row, dict):
+                            _tag = _row.get("tag", "")
+                            if _tag == "text":
+                                _text += _row.get("text", "")
+                            elif _tag == "at":
+                                _text += f"@{_row.get('user_name', '')} "
+                    if not _text:
+                        _text = "[interactive卡片]"
+                else:
+                    _text = f"[{_msg_type}消息]"
+
+                if _text:
+                    _lines.append(f"[{_item.get('create_time', '')}] ({_sender_type}){_mentions_str} {_text}")
+                    _count += 1
+
+            if not _lines:
+                return "=== 群消息记录（共 0 条）===\n暂无符合条件的消息"
+
+            return f"=== 群消息记录（共 {len(_lines)} 条，按时间倒序）===\n" + "\n".join(_lines)
+
+    except httpx.TimeoutException:
+        return "❌ Request timeout. Please try again."
+    except Exception as _e:
+        return f"❌ Error: {str(_e)}"
 
 
 # ─── Email Tool Helpers ─────────────────────────────────────
