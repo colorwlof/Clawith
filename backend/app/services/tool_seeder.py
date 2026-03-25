@@ -232,7 +232,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_message_to_agent",
         "display_name": "Agent Message",
-        "description": "Send a message to a digital employee colleague and receive a reply. In Feishu group chats, you can @ mention the recipient by name (e.g. '@产品经理') to message another bot directly. Suitable for questions, delegation, or collaboration.",
+        "description": "Send a message to a digital employee colleague and receive a reply. Suitable for questions, delegation, or collaboration.",
         "category": "communication",
         "icon": "🤖",
         "is_default": True,
@@ -775,7 +775,7 @@ BUILTIN_TOOLS = [
     {
         "name": "send_feishu_message",
         "display_name": "Feishu Message",
-        "description": "Send a message to a human colleague via Feishu. In group chats, you can @ mention the recipient by name (e.g. '张三') — the message will be posted in the group and the mentioned person will be notified. Can only message people in your relationships.",
+        "description": "Send a message to a human colleague via Feishu. Can only message people in your relationships.",
         "category": "feishu",
         "icon": "💬",
         "is_default": False,

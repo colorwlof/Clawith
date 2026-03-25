@@ -647,7 +647,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                 logger.error(f"[Feishu] File injection error: {_fe}")
 
             # ── Inject group chat context for multi-agent collaboration ──
-            # Only for group chats, when bot is mentioned
+            # Auto fetch for all group chat messages (not just when bot is mentioned)
             if chat_type == "group" and chat_id:
                 try:
                     import time as _grp_time
@@ -658,19 +658,21 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                                 agent_id,
                                 {
                                     "chat_id": chat_id,
-                                    "limit": 10,
-                                    "start_time": "600",
-                                    "include_own": False,
+                                    "limit": 20,
+                                    "start_time": "3600",
+                                    "include_own": True,
                                 },
                             )
-                            return _result
+                            if _result:
+                                return f'[From: {chat_id}]\n[提示：你可以发群消息："@对方名称"+" "+ "你要对对方说的话"]\n{_result}'
+                            return ""
                         except Exception as _e:
                             logger.error(f"[Feishu] Error fetching group context: {_e}")
                             return ""
 
                     _grp_ctx = await _fetch_group_context()
                     if _grp_ctx:
-                        llm_user_text = f"[群聊上下文（最近消息，来自其他成员）]\n{_grp_ctx}\n\n---\n当前用户的消息：\n{llm_user_text}"
+                        llm_user_text = f"{_grp_ctx}\n\n---\n当前用户的消息：\n{llm_user_text}"
                         logger.info(f"[Feishu] Injected group context ({len(_grp_ctx)} chars)")
                 except Exception as _grp_e:
                     logger.error(f"[Feishu] Group context injection error: {_grp_e}")

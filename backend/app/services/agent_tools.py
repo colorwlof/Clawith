@@ -5640,7 +5640,7 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
     if not chat_id.startswith("oc_"):
         return "❌ chat_id must be a group chat ID (oc_xxx format)"
 
-    limit = min(int(arguments.get("limit", 50)), 100)
+    limit = min(int(arguments.get("limit", 10)), 10)
     _st = arguments.get("start_time", "3600")
     start_time = int(_st) if _st else 0
     include_own = arguments.get("include_own", True)
@@ -5650,6 +5650,104 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
         return "❌ Agent has no Feishu channel configured."
 
     app_id, _access_token = creds
+
+    # Get bot's open_id and name
+    from app.api.feishu import _get_bot_open_id
+
+    bot_open_id = await _get_bot_open_id(agent_id)
+    bot_app_id = app_id
+
+    _bot_name = ""
+    try:
+        from app.database import async_session as _async_session
+        from sqlalchemy import select as _sa_select
+        from app.models.agent import Agent as _Agent
+
+        async with _async_session() as _db:
+            _r = await _db.execute(_sa_select(_Agent).where(_Agent.id == agent_id))
+            _agent = _r.scalar_one_or_none()
+            if _agent:
+                _bot_name = _agent.name or ""
+    except Exception:
+        pass
+
+    # Cache for user names to avoid repeated lookups
+    _user_name_cache: dict[str, str] = {}
+
+    async def _lookup_user_name(user_id: str) -> str:
+        """Look up user name from cache, database, or cache file."""
+        if user_id in _user_name_cache:
+            return _user_name_cache[user_id]
+
+        # 1. Try cache file
+        _cache_file = WORKSPACE_ROOT / str(agent_id) / "feishu_contacts_cache.json"
+        try:
+            if _cache_file.exists():
+                _raw = json.loads(_cache_file.read_text())
+                for u in _raw.get("users", []):
+                    if u.get("open_id") == user_id or u.get("user_id") == user_id:
+                        name = u.get("name", "")
+                        if name:
+                            _user_name_cache[user_id] = name
+                            return name
+        except Exception:
+            pass
+
+        # 2. Try OrgMember table
+        try:
+            from app.database import async_session as _async_session
+            from sqlalchemy import select as _sa_select
+            from app.models.org import OrgMember as _OrgMember
+
+            async with _async_session() as _db:
+                _r = await _db.execute(
+                    _sa_select(_OrgMember).where(
+                        (_OrgMember.feishu_open_id == user_id) | (_OrgMember.feishu_user_id == user_id)
+                    )
+                )
+                _member = _r.scalar_one_or_none()
+                if _member and _member.name:
+                    _user_name_cache[user_id] = _member.name
+                    return _member.name
+        except Exception:
+            pass
+
+        # 3. Try User table
+        try:
+            from app.database import async_session as _async_session
+            from sqlalchemy import select as _sa_select
+            from app.models.user import User as _User
+
+            async with _async_session() as _db:
+                _r = await _db.execute(
+                    _sa_select(_User).where((_User.feishu_open_id == user_id) | (_User.feishu_user_id == user_id))
+                )
+                _user = _r.scalar_one_or_none()
+                if _user and _user.display_name:
+                    _user_name_cache[user_id] = _user.display_name
+                    return _user.display_name
+        except Exception:
+            pass
+
+        # 4. Fallback to API (last resort)
+        try:
+            import httpx as _httpx
+
+            _resp = _httpx.get(
+                f"https://open.feishu.cn/open-apis/contact/v3/users/{user_id}",
+                headers={"Authorization": f"Bearer {_access_token}"},
+                params={"user_id_type": "open_id"},
+                timeout=3.0,
+            )
+            _user_data = _resp.json()
+            name = _user_data.get("data", {}).get("name", "")
+            if name:
+                _user_name_cache[user_id] = name
+                return name
+        except Exception:
+            pass
+
+        return ""
 
     try:
         async with httpx.AsyncClient() as _c:
@@ -5662,6 +5760,7 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                 "end_time": str(_now),
                 "page_size": str(limit),
                 "sort_type": "ByCreateTimeDesc",
+                "include_own": "true" if include_own else "false",
             }
 
             _mr = await _c.get(
@@ -5687,29 +5786,59 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                 _sender = _item.get("sender", {})
                 _sender_type = _sender.get("sender_type", "unknown")
                 _sender_id = _sender.get("id", "unknown")
+                _msg_type = _item.get("msg_type", "")
+                _body = _item.get("body", {})
 
-                # Filter bot messages if not including own
-                if not include_own and _sender_type == "bot":
-                    continue
+                # For text messages, parse body.content to get text
+                if _msg_type == "text":
+                    _raw_content = _body.get("content", "{}")
+                    try:
+                        # body.content is double-encoded JSON string
+                        _json_content = json.loads(_raw_content) if isinstance(_raw_content, str) else _raw_content
+                        if isinstance(_json_content, str):
+                            _json_content = json.loads(_json_content)
+                        _text = _json_content.get("text", "") if isinstance(_json_content, dict) else str(_json_content)
+                    except Exception:
+                        _text = _raw_content
+                    _content = {}
+                else:
+                    # For interactive/card messages, content is a JSON string in body.content
+                    _raw_body_content = _body.get("content", "{}")
+                    try:
+                        _content = (
+                            json.loads(_raw_body_content) if isinstance(_raw_body_content, str) else _raw_body_content
+                        )
+                    except Exception:
+                        _content = {}
+                    _text = ""
 
-                _msg_type = _item.get("msg_type", "text")
-                _content_str = _item.get("body", {}).get("content", "{}")
-                try:
-                    _content = _json.loads(_content_str) if isinstance(_content_str, str) else _content_str
-                except Exception:
-                    _content = {"text": _content_str}
-
-                # Extract text content and mentions
-                _text = ""
                 _mentions_str = ""
+                _mention_name = ""
 
                 # Extract mentions from content (for text messages)
                 if _msg_type == "text":
-                    _text = _content.get("text", "")
-                    # Find @mentions in text
-                    _mention_matches = _re.findall(r"<at id='([^']+)'></at>", _text) if "re" in dir() else []
+                    # Find @mentions in text - extract name from <at id='xxx' name='yyy'></at>
+                    _mention_matches = re.findall(r"<at id='([^']+)' name='([^']+)'></at>", _text)
+                    _mention_name = ""
                     if _mention_matches:
-                        _mentions_str = f" [收到@: {len(_mention_matches)}人]"
+                        for _m in _mention_matches:
+                            _m_name = _m[1]
+                            if _m_name.startswith("_user_"):
+                                _mention_name = "user"  # 内部ID转换为 user
+                            else:
+                                _mention_name = _m_name
+                            break
+                        _mentions_str = f"@{_mention_name}"
+                        # 移除 <at> 标签
+                        _text = re.sub(r"<at id='[^']+' name='[^']+'></at>", "", _text)
+                    # 提取 @_user_X 格式的 mention
+                    if not _mention_name:
+                        _at_matches = re.findall(r"@(_user_\d+)", _text)
+                        if _at_matches:
+                            _mention_name = "user"
+                            _mentions_str = f"@{_mention_name}"
+                            # 移除 @_user_X 格式
+                            _text = re.sub(r"@_user_\d+", "", _text).strip()
                 elif _msg_type == "post":
                     for _para in _content.get("zh_cn", {}).get("content", []):
                         for _t in _para:
@@ -5728,16 +5857,25 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                                 _text += _t.get("text", "")
                     if not _text:
                         _text = "[富文本消息]"
-                elif _msg_type == "interactive":
-                    # 解析 interactive 卡片消息（content.text 是 JSON 字符串）
+
+                # 判断是否是机器人发的消息（提前定义，以便后续使用）
+                _is_sender_bot = _sender_type == "app" or (_sender_id and bot_app_id and _sender_id == bot_app_id)
+
+                if _msg_type == "interactive":
+                    # 解析 interactive 卡片消息：_content 包含 title 和 elements
+                    _card_mentions = []  # 收集卡片中的@mention
+                    _sender_from_card = ""  # 从卡片标题获取发送者
                     try:
-                        _inner = json.loads(_content.get("text", "{}"))
-                        _elements = _inner.get("elements", [])
-                        _title = _inner.get("title", "")
-                        if _title:
-                            _text = f"[卡片: {_title}]\n"
+                        _sender_from_card = _content.get("title", "")  # 卡片标题就是发送者
+                        _elements = _content.get("elements", [])
                     except Exception:
                         _elements = []
+
+                    # 如果卡片中有@mention，使用第一个作为_mention_name
+                    if _card_mentions:
+                        _mention_name = _card_mentions[0]
+
+                    # 提取卡片内容中的@mention（只从at标签获取）和文本
                     for _row in _elements:
                         if isinstance(_row, list):
                             for _col in _row:
@@ -5745,34 +5883,201 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                                 if _tag == "text":
                                     _text += _col.get("text", "")
                                 elif _tag == "at":
-                                    _text += f"@{_col.get('user_name', '')} "
+                                    _mention = _col.get("user_name", "")
+                                    if _mention and not _mention.startswith("_user_"):
+                                        _card_mentions.append(_mention)
+                                        _text += "@" + _mention + " "
                         elif isinstance(_row, dict):
                             _tag = _row.get("tag", "")
                             if _tag == "text":
                                 _text += _row.get("text", "")
                             elif _tag == "at":
-                                _text += f"@{_row.get('user_name', '')} "
-                    if not _text:
-                        _text = "[interactive卡片]"
-                else:
+                                _mention = _row.get("user_name", "")
+                                if _mention and not _mention.startswith("_user_"):
+                                    _card_mentions.append(_mention)
+                                    _text += "@" + _mention + " "
+                elif _msg_type and _msg_type not in ("text", "interactive"):
                     _text = f"[{_msg_type}消息]"
 
                 if _text:
+                    # 格式化时间戳
                     _create_time = _item.get("create_time", "")
                     if _create_time:
                         try:
-                            _dt = datetime.fromtimestamp(int(_create_time) / 1000, tz=timezone.utc)
+                            _dt = datetime.fromtimestamp(int(_create_time) / 1000).astimezone()
                             _create_time = _dt.strftime("%d/%H:%M:%S")
                         except Exception:
                             pass
-                    _sender_name = _sender_type if _sender_type == "bot" else f"user:{_sender_id}"
-                    _lines.append(f"[{_create_time}] ({_sender_name}){_mentions_str} {_text}")
+
+                    # 提取@mention名称（从text消息或卡片中）
+                    # 注意：_mention_name 可能已经在前面设置过，不要覆盖
+
+                    # 判断是否是机器人发的消息（提前定义，以便后续使用）
+                    _is_sender_bot = _sender_type == "app" or (_sender_id and bot_app_id and _sender_id == bot_app_id)
+
+                    # 从text消息提取@mention（如果还没有设置）
+                    _mention_id = ""  # 保存@的ID用于后续查找
+                    if not _mention_name and _msg_type == "text":
+                        _mention_matches = re.findall(r"<at id='([^']+)' name='([^']+)'></at>", _text)
+                        if _mention_matches:
+                            for m in _mention_matches:
+                                _mid, _mname = m
+                                _mention_id = _mid
+                                if _mname and not _mname.startswith("_user_"):
+                                    _mention_name = _mname
+                                    break
+                            # 移除@mention标签
+                            _text = re.sub(r"<at id='[^']+' name='[^']+'></at>", "", _text)
+
+                    # 如果@mention名称为空，根据ID类型查找名称
+                    if not _mention_name and _mention_id:
+                        # _user_xxx 格式是用户ID，需要查数据库或使用发送者名称
+                        if _mention_id.startswith("_user_"):
+                            # 优先使用发送者名称（如果有的话）
+                            if _sender_name and _sender_name != "user" and not _is_sender_bot:
+                                _mention_name = _sender_name
+                            else:
+                                # 尝试查OrgMember表
+                                try:
+                                    from app.database import async_session as _async_session
+                                    from sqlalchemy import select as _sa_select
+                                    from app.models.org import OrgMember as _OrgMember
+
+                                    # 提取user_id
+                                    _feishu_user_id = _mention_id.replace("_user_", "")
+
+                                    async with _async_session() as _db:
+                                        _r = await _db.execute(
+                                            _sa_select(_OrgMember).where(
+                                                (_OrgMember.feishu_user_id == _feishu_user_id)
+                                                | (_OrgMember.feishu_open_id == _feishu_user_id)
+                                            )
+                                        )
+                                        _member = _r.scalar_one_or_none()
+                                        if _member and _member.name:
+                                            _mention_name = _member.name
+                                except Exception:
+                                    pass
+                                # 如果还没找到，尝试查User表
+                                if not _mention_name:
+                                    try:
+                                        from app.database import async_session as _async_session
+                                        from sqlalchemy import select as _sa_select
+                                        from app.models.user import User as _User
+
+                                        async with _async_session() as _db:
+                                            _r = await _db.execute(
+                                                _sa_select(_User).where(
+                                                    (_User.feishu_user_id == _feishu_user_id)
+                                                    | (_User.feishu_open_id == _feishu_user_id)
+                                                )
+                                            )
+                                            _user = _r.scalar_one_or_none()
+                                            if _user and _user.display_name:
+                                                _mention_name = _user.display_name
+                                    except Exception:
+                                        pass
+                            # 如果还没找到，尝试查User表
+                            if not _mention_name:
+                                try:
+                                    from app.database import async_session as _async_session
+                                    from sqlalchemy import select as _sa_select
+                                    from app.models.user import User as _User
+
+                                    async with _async_session() as _db:
+                                        _r = await _db.execute(
+                                            _sa_select(_User).where(
+                                                (_User.feishu_user_id == _feishu_user_id)
+                                                | (_User.feishu_open_id == _feishu_user_id)
+                                            )
+                                        )
+                                        _user = _r.scalar_one_or_none()
+                                        if _user and _user.display_name:
+                                            _mention_name = _user.display_name
+                                except Exception:
+                                    pass
+                        # cli_xxx 或 ou_xxx 可能是机器人ID
+                        elif _mention_id.startswith("cli_") or _mention_id.startswith("ou_"):
+                            # 尝试匹配当前机器人
+                            if _mention_id == bot_app_id or _mention_id == bot_open_id:
+                                _mention_name = _bot_name or "机器人"
+                            # 查数据库中的机器人
+                            if not _mention_name:
+                                try:
+                                    from app.database import async_session as _async_session
+                                    from sqlalchemy import select as _sa_select
+                                    from app.models.agent import Agent as _Agent
+
+                                    async with _async_session() as _db:
+                                        _r = await _db.execute(
+                                            _sa_select(_Agent).where(
+                                                (_Agent.feishu_app_id == _mention_id)
+                                                | (_Agent.feishu_open_id == _mention_id)
+                                            )
+                                        )
+                                        _agent = _r.scalar_one_or_none()
+                                        if _agent and _agent.name:
+                                            _mention_name = _agent.name
+                                except Exception:
+                                    pass
+
+                    # 从卡片提取@mention
+                    if _msg_type == "interactive" and _card_mentions:
+                        _mention_name = _card_mentions[0]
+
+                    # 格式化sender: (发送者@接收者)
+                    # 3种情况：
+                    # 1. 用户说话（无@）：(user)
+                    # 2. 用户@机器人：(user@机器人)
+                    # 3. 机器人@机器人：(机器人@机器人)
+
+                    if _is_sender_bot:
+                        _sender_name = _sender_from_card if _sender_from_card else (_bot_name or "机器人")
+                    else:
+                        # 对于用户消息，从缓存/数据库/API获取用户名
+                        if _sender_id:
+                            _sender_name = await _lookup_user_name(_sender_id)
+                            if not _sender_name:
+                                _sender_name = "user"
+                        else:
+                            _sender_name = "user"
+
+                    # 如果@mention名称为空或为"user"且有@ID
+                    # 群里只有用户和机器人，需要根据发送者类型判断被@的是谁
+                    if not _mention_name and _mention_id:
+                        if _is_sender_bot:
+                            # 机器人发的消息@用户，需要获取被@的用户名称
+                            if _mention_id.startswith("_user_"):
+                                # 用户ID，尝试获取发送者名称作为被@者
+                                _mention_name = _sender_name if _sender_name != "user" else ""
+                            elif _mention_id.startswith("cli_") or _mention_id.startswith("ou_"):
+                                # 可能是另一个机器人
+                                _mention_name = ""
+                        else:
+                            # 用户发的消息@机器人，用当前机器人名称
+                            _mention_name = _bot_name or "机器人"
+
+                    # 如果@mention名称是"user"（飞书占位符），也用机器人名称替换
+                    if _mention_name == "user" and not _is_sender_bot:
+                        _mention_name = _bot_name or "机器人"
+
+                    # 添加@mention到sender
+                    _is_mention_bot = False
+                    if _mention_name and not _mention_name.startswith("_user_"):
+                        # 判断被@的是否是机器人（通过名称比较或ID比较）
+                        _is_mention_bot = _mention_name in [_sender_from_card, "机器人"] if _sender_from_card else False
+                        if not _is_mention_bot and bot_open_id:
+                            # 尝试通过API获取被@者的信息判断是否是机器人
+                            pass
+                        _sender_name = f"{_sender_name}@{_mention_name}"
+
+                    _lines.append(f"[{_create_time}] ({_sender_name}) {_text}")
                     _count += 1
 
             if not _lines:
-                return "=== 群消息记录（共 0 条）===\n暂无符合条件的消息"
+                return ""
 
-            return f"=== 群消息记录（共 {len(_lines)} 条，按时间倒序）===\n" + "\n".join(_lines)
+            return f"[From: {chat_id}]\n\n" + "\n".join(_lines) + "\n\n---历史消息---"
 
     except httpx.TimeoutException:
         return "❌ Request timeout. Please try again."

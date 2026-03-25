@@ -470,16 +470,6 @@ def _FETCH_FEISHU_GROUP_MESSAGES():
 
 ---
 
-## 12. 飞书工具描述更新（2026-03-22）
-
-**文件**: `backend/app/services/tool_seeder.py`
-
-**问题**: Agent 不知道可以在群里 @ 人。
-
-**修改**: 更新工具的 description：
-- `send_message_to_agent`: 加 "In Feishu group chats, you can @ mention the recipient by name (e.g. '@产品经理') to message another bot directly."
-- `send_feishu_message`: 加 "In group chats, you can @ mention the recipient by name (e.g. '张三')"
-
 ---
 
 ## 13. 数据库迁移（notifications 表）
