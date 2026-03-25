@@ -3259,7 +3259,7 @@ async def _send_message_to_agent(from_agent_id: uuid.UUID, args: dict) -> str:
                 api_key=target_model.api_key_encrypted,
                 model=target_model.model,
                 base_url=base_url,
-                timeout=120.0,
+                timeout=1200.0,  # 20 minutes
             )
             _A2A_RETRYABLE_MARKERS = (
                 "http 408",
