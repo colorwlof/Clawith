@@ -16,8 +16,11 @@ import json
 import re
 import os
 import uuid
+import logging
 from contextvars import ContextVar
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 
 from loguru import logger
@@ -5637,8 +5640,8 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
     if not chat_id.startswith("oc_"):
         return "❌ chat_id must be a group chat ID (oc_xxx format)"
 
-    limit = min(int(arguments.get("limit", 10)), 20)
-    _st = arguments.get("start_time", "600")
+    limit = min(int(arguments.get("limit", 50)), 100)
+    _st = arguments.get("start_time", "3600")
     start_time = int(_st) if _st else 0
     include_own = arguments.get("include_own", True)
 
@@ -5726,8 +5729,15 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                     if not _text:
                         _text = "[富文本消息]"
                 elif _msg_type == "interactive":
-                    # 解析 interactive 卡片消息
-                    _elements = _content.get("elements", [])
+                    # 解析 interactive 卡片消息（content.text 是 JSON 字符串）
+                    try:
+                        _inner = json.loads(_content.get("text", "{}"))
+                        _elements = _inner.get("elements", [])
+                        _title = _inner.get("title", "")
+                        if _title:
+                            _text = f"[卡片: {_title}]\n"
+                    except Exception:
+                        _elements = []
                     for _row in _elements:
                         if isinstance(_row, list):
                             for _col in _row:
@@ -5748,7 +5758,15 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                     _text = f"[{_msg_type}消息]"
 
                 if _text:
-                    _lines.append(f"[{_item.get('create_time', '')}] ({_sender_type}){_mentions_str} {_text}")
+                    _create_time = _item.get("create_time", "")
+                    if _create_time:
+                        try:
+                            _dt = datetime.fromtimestamp(int(_create_time) / 1000, tz=timezone.utc)
+                            _create_time = _dt.strftime("%d/%H:%M:%S")
+                        except Exception:
+                            pass
+                    _sender_name = _sender_type if _sender_type == "bot" else f"user:{_sender_id}"
+                    _lines.append(f"[{_create_time}] ({_sender_name}){_mentions_str} {_text}")
                     _count += 1
 
             if not _lines:

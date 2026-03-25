@@ -672,3 +672,14 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 **修改**: 移除 `isWaiting || isStreaming` 禁用条件，只在 `!wsConnected` 时禁用
 
 **效果**: 用户可以在机器人回答时输入消息，消息会自动排队处理
+
+### 15.13 fetch_feishu_group_messages 修复 ✅ 新增
+
+**文件**: `backend/app/services/agent_tools.py`
+
+**修复内容**:
+- 时间戳格式化为 `[dd/HH:mm:ss]`
+- sender 显示为 `user:{open_id}`
+- interactive 卡片消息解析（双重 JSON 编码）
+- 默认获取 50 条，最大 100 条
+- 默认时间范围改为 1 小时
