@@ -662,3 +662,13 @@ ALTER TABLE llm_models ADD COLUMN temperature FLOAT DEFAULT 0.7;
 **文件**: `backend/app/services/llm_client.py`
 
 **修改**: `timeout` 默认值从 120 秒改为 600 秒
+
+### 15.12 聊天输入框支持排队 ✅ 新增
+
+**文件**: `frontend/src/pages/AgentDetail.tsx`
+
+**问题**: 机器人回答问题时，输入框被禁用，无法输入
+
+**修改**: 移除 `isWaiting || isStreaming` 禁用条件，只在 `!wsConnected` 时禁用
+
+**效果**: 用户可以在机器人回答时输入消息，消息会自动排队处理
