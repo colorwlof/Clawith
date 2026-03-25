@@ -5814,6 +5814,7 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
 
                 _mentions_str = ""
                 _mention_name = ""
+                _mention_id = ""
 
                 # Extract mentions from content (for text messages)
                 if _msg_type == "text":
@@ -5909,27 +5910,7 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
                         except Exception:
                             pass
 
-                    # 提取@mention名称（从text消息或卡片中）
-                    # 注意：_mention_name 可能已经在前面设置过，不要覆盖
-
-                    # 判断是否是机器人发的消息（提前定义，以便后续使用）
-                    _is_sender_bot = _sender_type == "app" or (_sender_id and bot_app_id and _sender_id == bot_app_id)
-
-                    # 从text消息提取@mention（如果还没有设置）
-                    _mention_id = ""  # 保存@的ID用于后续查找
-                    if not _mention_name and _msg_type == "text":
-                        _mention_matches = re.findall(r"<at id='([^']+)' name='([^']+)'></at>", _text)
-                        if _mention_matches:
-                            for m in _mention_matches:
-                                _mid, _mname = m
-                                _mention_id = _mid
-                                if _mname and not _mname.startswith("_user_"):
-                                    _mention_name = _mname
-                                    break
-                            # 移除@mention标签
-                            _text = re.sub(r"<at id='[^']+' name='[^']+'></at>", "", _text)
-
-                    # 如果@mention名称为空，根据ID类型查找名称
+                    # 如果@mention名称为空且有@ID，根据ID类型查找名称
                     if not _mention_name and _mention_id:
                         # _user_xxx 格式是用户ID，需要查数据库或使用发送者名称
                         if _mention_id.startswith("_user_"):
