@@ -6058,7 +6058,7 @@ async def _fetch_feishu_group_messages(agent_id: uuid.UUID, arguments: dict) -> 
             if not _lines:
                 return ""
 
-            return f"[From: {chat_id}]\n\n" + "\n".join(_lines) + "\n\n---历史消息---"
+            return "\n".join(_lines) + "\n\n---历史消息---"
 
     except httpx.TimeoutException:
         return "❌ Request timeout. Please try again."
