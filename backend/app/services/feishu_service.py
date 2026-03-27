@@ -27,10 +27,13 @@ class FeishuService:
     async def get_app_access_token(self) -> str:
         """Get or refresh the app-level access token."""
         async with httpx.AsyncClient() as client:
-            resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": self.app_id,
-                "app_secret": self.app_secret,
-            })
+            resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": self.app_id,
+                    "app_secret": self.app_secret,
+                },
+            )
             data = resp.json()
             self._app_access_token = data.get("app_access_token", "")
             return self._app_access_token
@@ -44,17 +47,24 @@ class FeishuService:
 
         async with httpx.AsyncClient() as client:
             # Get user access token
-            token_resp = await client.post(FEISHU_TOKEN_URL, json={
-                "grant_type": "authorization_code",
-                "code": code,
-            }, headers={"Authorization": f"Bearer {app_token}"})
+            token_resp = await client.post(
+                FEISHU_TOKEN_URL,
+                json={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                },
+                headers={"Authorization": f"Bearer {app_token}"},
+            )
             token_data = token_resp.json()
             user_access_token = token_data.get("data", {}).get("access_token", "")
 
             # Get user info
-            info_resp = await client.get(FEISHU_USER_INFO_URL, headers={
-                "Authorization": f"Bearer {user_access_token}",
-            })
+            info_resp = await client.get(
+                FEISHU_USER_INFO_URL,
+                headers={
+                    "Authorization": f"Bearer {user_access_token}",
+                },
+            )
             info_data = info_resp.json().get("data", {})
 
             return {
@@ -128,8 +138,15 @@ class FeishuService:
         await db.flush()
         return user
 
-    async def send_message(self, app_id: str, app_secret: str, receive_id: str,
-                           msg_type: str, content: str, receive_id_type: str = "open_id") -> dict:
+    async def send_message(
+        self,
+        app_id: str,
+        app_secret: str,
+        receive_id: str,
+        msg_type: str,
+        content: str,
+        receive_id_type: str = "open_id",
+    ) -> dict:
         """Send a message via a specific Feishu bot (per-agent credentials).
 
         Args:
@@ -142,10 +159,13 @@ class FeishuService:
         """
         # Get app access token for this specific agent's bot
         async with httpx.AsyncClient() as client:
-            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": app_id,
-                "app_secret": app_secret,
-            })
+            token_resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                },
+            )
             app_token = token_resp.json().get("app_access_token", "")
 
             resp = await client.post(
@@ -162,10 +182,13 @@ class FeishuService:
     async def patch_message(self, app_id: str, app_secret: str, message_id: str, content: str) -> dict:
         """Patch an existing message (e.g. updating an interactive card for streaming)."""
         async with httpx.AsyncClient() as client:
-            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": app_id,
-                "app_secret": app_secret,
-            })
+            token_resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                },
+            )
             app_token = token_resp.json().get("app_access_token", "")
 
             resp = await client.patch(
@@ -177,8 +200,9 @@ class FeishuService:
             )
             return resp.json()
 
-    async def resolve_open_id(self, app_id: str, app_secret: str,
-                               email: str | None = None, mobile: str | None = None) -> str | None:
+    async def resolve_open_id(
+        self, app_id: str, app_secret: str, email: str | None = None, mobile: str | None = None
+    ) -> str | None:
         """Resolve a user's open_id for a specific app using email or mobile.
 
         Each Feishu app gets a unique open_id per user. This method looks up the
@@ -188,10 +212,13 @@ class FeishuService:
             return None
 
         async with httpx.AsyncClient() as client:
-            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": app_id,
-                "app_secret": app_secret,
-            })
+            token_resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                },
+            )
             app_token = token_resp.json().get("app_access_token", "")
 
             body: dict = {}
@@ -217,8 +244,9 @@ class FeishuService:
                     return oid
             return None
 
-    async def resolve_user_id(self, app_id: str, app_secret: str,
-                               email: str | None = None, mobile: str | None = None) -> str | None:
+    async def resolve_user_id(
+        self, app_id: str, app_secret: str, email: str | None = None, mobile: str | None = None
+    ) -> str | None:
         """Resolve a user's tenant-level user_id using email or mobile.
 
         Unlike open_id, user_id is stable across all apps within the same tenant.
@@ -228,10 +256,13 @@ class FeishuService:
             return None
 
         async with httpx.AsyncClient() as client:
-            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": app_id,
-                "app_secret": app_secret,
-            })
+            token_resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                },
+            )
             app_token = token_resp.json().get("app_access_token", "")
 
             body: dict = {}
@@ -257,43 +288,56 @@ class FeishuService:
                     return uid
             return None
 
-    async def send_approval_card(self, app_id: str, app_secret: str,
-                                  creator_open_id: str, agent_name: str,
-                                  action_type: str, details: str, approval_id: str) -> dict:
+    async def send_approval_card(
+        self,
+        app_id: str,
+        app_secret: str,
+        creator_open_id: str,
+        agent_name: str,
+        action_type: str,
+        details: str,
+        approval_id: str,
+    ) -> dict:
         """Send an interactive approval card to the agent creator via Feishu."""
         import json
-        card_content = json.dumps({
-            "type": "template",
-            "data": {
-                "template_id": "",  # Use custom card
-                "template_variable": {
-                    "agent_name": agent_name,
-                    "action_type": action_type,
-                    "details": details,
-                    "approval_id": approval_id,
-                }
+
+        card_content = json.dumps(
+            {
+                "type": "template",
+                "data": {
+                    "template_id": "",  # Use custom card
+                    "template_variable": {
+                        "agent_name": agent_name,
+                        "action_type": action_type,
+                        "details": details,
+                        "approval_id": approval_id,
+                    },
+                },
             }
-        })
+        )
         # Simplified — in production, use Feishu interactive card JSON
-        text_content = json.dumps({
-            "text": f"🔴 [{agent_name}] 请求审批\n操作: {action_type}\n详情: {details}\n\n请在 Clawith 平台审批。"
-        })
+        text_content = json.dumps(
+            {"text": f"🔴 [{agent_name}] 请求审批\n操作: {action_type}\n详情: {details}\n\n请在 Clawith 平台审批。"}
+        )
         return await self.send_message(app_id, app_secret, creator_open_id, "text", text_content)
 
-    async def download_message_resource(self, app_id: str, app_secret: str,
-                                         message_id: str, file_key: str,
-                                         resource_type: str = "file") -> bytes:
+    async def download_message_resource(
+        self, app_id: str, app_secret: str, message_id: str, file_key: str, resource_type: str = "file"
+    ) -> bytes:
         """Download a file or image from a Feishu message.
 
         Args:
             resource_type: "file" or "image"
         Returns raw file bytes.
         """
-        async with httpx.AsyncClient(timeout=30) as client:
-            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": app_id,
-                "app_secret": app_secret,
-            })
+        async with httpx.AsyncClient(timeout=1200) as client:
+            token_resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                },
+            )
             app_token = token_resp.json().get("app_access_token", "")
             resp = await client.get(
                 f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
@@ -303,22 +347,32 @@ class FeishuService:
             resp.raise_for_status()
             return resp.content
 
-    async def upload_and_send_file(self, app_id: str, app_secret: str,
-                                    receive_id: str, file_path,
-                                    receive_id_type: str = "open_id",
-                                    accompany_msg: str = "") -> dict:
+    async def upload_and_send_file(
+        self,
+        app_id: str,
+        app_secret: str,
+        receive_id: str,
+        file_path,
+        receive_id_type: str = "open_id",
+        accompany_msg: str = "",
+    ) -> dict:
         """Upload a local file to Feishu and send it as a file message.
 
         Returns the send_message response dict.
         """
         import json as _json
         from pathlib import Path as _Path
+
         fp = _Path(file_path)
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=1200) as client:
             # Get token
-            token_resp = await client.post(FEISHU_APP_TOKEN_URL, json={
-                "app_id": app_id, "app_secret": app_secret,
-            })
+            token_resp = await client.post(
+                FEISHU_APP_TOKEN_URL,
+                json={
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                },
+            )
             app_token = token_resp.json().get("app_access_token", "")
             headers = {"Authorization": f"Bearer {app_token}"}
 
@@ -345,16 +399,18 @@ class FeishuService:
             if accompany_msg:
                 await client.post(
                     f"{FEISHU_SEND_MSG_URL}?receive_id_type={receive_id_type}",
-                    json={"receive_id": receive_id, "msg_type": "text",
-                          "content": _json.dumps({"text": accompany_msg})},
+                    json={
+                        "receive_id": receive_id,
+                        "msg_type": "text",
+                        "content": _json.dumps({"text": accompany_msg}),
+                    },
                     headers=headers,
                 )
 
             # Send file message
             resp = await client.post(
                 f"{FEISHU_SEND_MSG_URL}?receive_id_type={receive_id_type}",
-                json={"receive_id": receive_id, "msg_type": "file",
-                      "content": _json.dumps({"file_key": file_key})},
+                json={"receive_id": receive_id, "msg_type": "file", "content": _json.dumps({"file_key": file_key})},
                 headers=headers,
             )
             return resp.json()

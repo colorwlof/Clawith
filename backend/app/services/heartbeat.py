@@ -252,7 +252,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                     api_key=model.api_key_encrypted,
                     model=model.model,
                     base_url=model.base_url,
-                    timeout=120.0,
+                    timeout=1200.0,  # 20 minutes
                 )
             except Exception as e:
                 logger.error(f"Failed to create LLM client: {e}")
