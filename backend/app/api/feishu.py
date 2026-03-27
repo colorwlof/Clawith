@@ -664,7 +664,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
                                 },
                             )
                             if _result:
-                                return f"[From: {chat_id}]\n{_result}"
+                                return _result
                             return ""
                         except Exception as _e:
                             logger.error(f"[Feishu] Error fetching group context: {_e}")
