@@ -249,7 +249,7 @@ export default function AgentCredentials({ agentId }: Props) {
             {/* Description */}
             <p className="credentials-desc">
                 {t('agent.credentials.description',
-                    'Store login credentials and cookies for websites. Cookies are automatically injected when the agent starts a new browser session.'
+                    'Store login credentials and cookies for websites. Cookies are automatically injected when the agent opens a browser via AgentBay.'
                 )}
             </p>
 
